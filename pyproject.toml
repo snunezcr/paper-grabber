@@ -1,0 +1,25 @@
+[project]
+name = "paper-grabber"
+version = "0.1.0"
+description = "Triage Google Scholar alerts, fetch open-access PDFs, file them to Drive"
+requires-python = ">=3.12"
+dependencies = [
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+paper-grabber = "paper_grabber.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/paper_grabber"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
