@@ -56,15 +56,25 @@ class Enrichment:
     year: int | None = None
     is_oa: bool = False
     oa_status: str | None = None
-    pdf_url: str | None = None
+    # Genuine PDF URLs, best first. A landing page is NOT a candidate: fetching
+    # one yields an HTML interstitial, which would be filed as if it were the
+    # paper. Landing pages live in landing_url for the "open in browser" path.
+    pdf_candidates: list[str] = field(default_factory=list)
     landing_url: str | None = None
     cited_by_count: int | None = None
     authors: list[str] = field(default_factory=list)
     # Why enrichment produced nothing useful, for triage in the UI and logs.
     note: str | None = None
 
+    @property
+    def pdf_url(self) -> str | None:
+        """The best PDF URL, or None if only landing pages are known."""
+        return self.pdf_candidates[0] if self.pdf_candidates else None
+
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d["pdf_url"] = self.pdf_url
+        return d
 
 
 def reconstruct_abstract(inverted: dict[str, list[int]] | None) -> str | None:
@@ -133,6 +143,35 @@ def _direct_pdf_url(paper: AlertPaper) -> str | None:
     if re.search(r"arxiv\.org/abs/", lowered):
         return re.sub(r"/abs/", "/pdf/", url, count=1)
     return None
+
+
+def _pdf_candidates(work: dict[str, Any], paper: AlertPaper) -> list[str]:
+    """Ordered, de-duplicated PDF URLs for a work.
+
+    Only URLs that OpenAlex explicitly labels ``pdf_url`` count, plus Scholar's
+    own link when it is plainly a PDF. ``open_access.oa_url`` is deliberately
+    excluded: for repository-hosted works it is usually a DOI landing page, and
+    fetching it returns HTML that would be filed as though it were the paper.
+    """
+    urls: list[str] = []
+
+    best = (work.get("best_oa_location") or {}).get("pdf_url")
+    if best:
+        urls.append(best)
+
+    # Later locations are worth keeping as fallbacks: the preferred host is
+    # sometimes down or bot-blocked while a mirror serves the same file.
+    for loc in work.get("locations") or []:
+        pdf = (loc or {}).get("pdf_url")
+        if pdf:
+            urls.append(pdf)
+
+    scholar = _direct_pdf_url(paper)
+    if scholar:
+        urls.append(scholar)
+
+    seen: set[str] = set()
+    return [u for u in urls if not (u in seen or seen.add(u))]
 
 
 class OpenAlexClient:
@@ -222,13 +261,14 @@ class OpenAlexClient:
         oa = work.get("open_access") or {}
         best_loc = work.get("best_oa_location") or {}
 
-        pdf_url = best_loc.get("pdf_url") or oa.get("oa_url")
+        candidates = _pdf_candidates(work, paper)
         note = None
-        if not pdf_url:
-            # OpenAlex says closed, but Scholar may already have a PDF link.
-            pdf_url = _direct_pdf_url(paper)
-            if pdf_url:
-                note = "OA location from Scholar link, not OpenAlex"
+        if not candidates:
+            note = (
+                "open access, but only a landing page is known"
+                if oa.get("is_oa")
+                else None
+            )
 
         doi = work.get("doi")
         return Enrichment(
@@ -243,8 +283,8 @@ class OpenAlexClient:
             year=work.get("publication_year"),
             is_oa=bool(oa.get("is_oa")),
             oa_status=oa.get("oa_status"),
-            pdf_url=pdf_url,
-            landing_url=best_loc.get("landing_page_url"),
+            pdf_candidates=candidates,
+            landing_url=best_loc.get("landing_page_url") or oa.get("oa_url"),
             cited_by_count=work.get("cited_by_count"),
             authors=[
                 a["author"]["display_name"]

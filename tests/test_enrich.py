@@ -207,8 +207,8 @@ def test_scholar_pdf_link_rescues_a_closed_work():
     c = make_client(works_response(work(title="Wireless millikelvin interconnects", is_oa=False, pdf_url=None)))
     e = c.enrich(p)
     assert e.pdf_url == "https://arxiv.org/pdf/2607.13834"
+    assert e.pdf_candidates == ["https://arxiv.org/pdf/2607.13834"]
     assert e.is_oa is False  # honest about OpenAlex's verdict
-    assert "Scholar link" in e.note
 
 
 def test_arxiv_abs_url_is_rewritten_to_pdf():

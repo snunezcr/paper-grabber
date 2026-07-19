@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 
 from .enrich import OpenAlexClient
+from .fetch import download_first_available, make_client
+from .filename import deduplicate_filename, pdf_filename
 from .parse import dedupe, parse_alert_email
 
 
@@ -65,6 +67,54 @@ def _print_summary(rows: list[dict]) -> None:
     print(f"\n{n} papers | matched {matched} | fetchable {with_pdf} | with text {with_abs}")
 
 
+def cmd_download(args) -> int:
+    """Parse, enrich, and save every retrievable PDF into a directory.
+
+    This is the local stand-in for the eventual Drive upload: same naming, same
+    collision handling, just a local destination.
+    """
+    args.dest.mkdir(parents=True, exist_ok=True)
+    papers = _load(args.paths)
+
+    with OpenAlexClient(mailto=args.mailto) as oa:
+        enriched = []
+        for i, paper in enumerate(papers):
+            if i:
+                time.sleep(args.delay)
+            enriched.append((paper, oa.enrich(paper)))
+
+    taken = {p.name for p in args.dest.iterdir() if p.is_file()}
+    saved = failed = skipped = 0
+
+    with make_client() as http:
+        for paper, e in enriched:
+            title = e.title or paper.title
+            year = e.year or paper.year
+
+            if not e.pdf_candidates:
+                skipped += 1
+                where = e.landing_url or paper.url
+                print(f"SKIP  {title[:58]}")
+                print(f"        no PDF location{f' -- open: {where}' if where else ''}")
+                continue
+
+            result = download_first_available(e.pdf_candidates, client=http)
+            if not result.ok:
+                failed += 1
+                print(f"FAIL  {title[:58]}")
+                print(f"        {result.reason}")
+                continue
+
+            name = deduplicate_filename(pdf_filename(title, year), taken)
+            taken.add(name)
+            (args.dest / name).write_bytes(result.content)
+            saved += 1
+            print(f"SAVED {result.size / 1024:7.0f} KB  {name}")
+
+    print(f"\nsaved {saved} | failed {failed} | no PDF location {skipped}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="paper-grabber")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -80,6 +130,13 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--delay", type=float, default=0.15, help="seconds between requests")
     e.add_argument("--summary", action="store_true", help="human-readable table")
     e.set_defaults(func=cmd_enrich)
+
+    d = sub.add_parser("download", help="parse, enrich, and save PDFs to a directory")
+    d.add_argument("paths", nargs="+", type=Path)
+    d.add_argument("--dest", type=Path, required=True, help="destination directory")
+    d.add_argument("--mailto", help="contact address for OpenAlex's polite pool")
+    d.add_argument("--delay", type=float, default=0.15)
+    d.set_defaults(func=cmd_download)
 
     args = ap.parse_args(argv)
     return args.func(args)
