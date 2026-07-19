@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlparse
 
 from bs4 import BeautifulSoup, Tag
 
+from .clean import clean_title
 from .models import AlertPaper, split_author_venue
 
 # Scholar wraps every outbound link; the real target is the `url` query param.
@@ -131,7 +132,7 @@ def parse_alert_html(
 
     papers: list[AlertPaper] = []
     for pos, anchor in enumerate(soup.select("a.gse_alrt_title")):
-        title = _text(anchor)
+        title = clean_title(_text(anchor))
         if not title:
             continue
 

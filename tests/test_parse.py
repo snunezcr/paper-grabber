@@ -212,9 +212,9 @@ def test_qca2_ampersand_entity_in_title(qca2):
     assert qca2[1].title.endswith("Quantum Computing & Machine Learning")
 
 
-def test_qca2_leading_quote_entity_in_title(qca2):
-    # Scholar emits a stray leading &quot; on this record.
-    assert qca2[2].title.startswith('" Navigating the Quantum Revolution')
+def test_qca2_leading_quote_entity_is_cleaned(qca2):
+    # Scholar emits a stray leading &quot; on this record; clean_title drops it.
+    assert qca2[2].title.startswith("Navigating the Quantum Revolution")
 
 
 def test_qca2_bare_year_byline(qca2):
@@ -241,3 +241,11 @@ def test_qca2_same_alert_id_as_first_fixture(papers, qca2):
 )
 def test_split_author_venue_year_edge_cases(line, expected):
     assert split_author_venue(line) == expected
+
+
+def test_latex_mangled_title_is_cleaned_end_to_end(papers):
+    # 'Schr\" odinger' in the raw email must reach us as 'Schrödinger'.
+    assert papers[4].title == (
+        "Universal Quantum Computation with Multi-Mode Schrödinger Cat States "
+        "Stabilized by Non-Local Dissipation Engineering"
+    )
