@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from email import message_from_bytes, message_from_string
 from email.message import Message
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, urlparse
 
 from bs4 import BeautifulSoup, Tag
 
@@ -49,7 +49,9 @@ def unwrap_scholar_url(href: str) -> str:
         return href
     params = parse_qs(urlparse(href).query)
     target = params.get("url", [None])[0]
-    return unquote(target) if target else href
+    # No second unquote: parse_qs has already percent-decoded, and decoding
+    # twice turns a literal "%2520" into a raw space and breaks the fetch.
+    return target or href
 
 
 def _html_part(msg: Message) -> str:

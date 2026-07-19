@@ -123,3 +123,51 @@ def test_split_author_venue(line, expected):
 
 def test_unwrap_passes_through_plain_urls():
     assert unwrap_scholar_url("https://arxiv.org/abs/1234") == "https://arxiv.org/abs/1234"
+
+
+# --- second alert: "quantum abstract machine" ---------------------------------
+
+
+@pytest.fixture(scope="module")
+def qam():
+    return parse_alert_email((DATA / "quantum-abstract-machine.eml").read_bytes())
+
+
+def test_qam_result_count(qam):
+    # Tracking pixel says trs=0,1.
+    assert len(qam) == 2
+
+
+def test_qam_bylines_without_venue(qam):
+    assert qam[0].authors == ["Z Zhu", "S Zhao", "D Tang", "J Guo", "L Shen"]
+    assert qam[0].venue is None and qam[0].year is None
+    assert qam[1].authors == ["DU Hur"]
+
+
+def test_qam_percent_encoded_inner_url_is_decoded_exactly_once(qam):
+    # Scholar percent-encodes the inner query string (books%3Fhl%3Den%26...).
+    # parse_qs decodes it; a second unquote would corrupt literal escapes.
+    assert qam[1].url == (
+        "https://books.google.com/books?hl=en&lr=lang_en&id=DiHzEQAAQBAJ"
+        "&oi=fnd&pg=PR5&dq=quantum+abstract+machine&ots=WFE5AjvVQ6"
+        "&sig=qasklPs85w-4r9qIHYU9Mr73dVs"
+    )
+
+
+def test_qam_alert_metadata(qam):
+    assert all(p.alert_query == "quantum abstract machine" for p in qam)
+    assert all(p.alert_id == "jsaKBQ1wChoJ" for p in qam)
+
+
+def test_qam_snippet_with_bold_abstract_label(qam):
+    # The snippet literally starts "… Abstract: Machine learning has …"
+    assert qam[0].snippet.startswith("… Abstract: Machine learning has become")
+
+
+def test_alert_ids_differ_between_alerts(papers, qam):
+    assert papers[0].alert_id != qam[0].alert_id
+
+
+def test_unwrap_does_not_double_decode():
+    wrapped = "https://scholar.google.com/scholar_url?url=https://ex.org/a%2520b&hl=en"
+    assert unwrap_scholar_url(wrapped) == "https://ex.org/a%20b"
