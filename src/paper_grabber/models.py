@@ -7,9 +7,12 @@ import unicodedata
 from dataclasses import dataclass, field, asdict
 from typing import Any
 
-# Scholar separates the author list from the venue with NBSP + hyphen.
-_AUTHOR_VENUE_SEP = " - "
+# Scholar usually separates the author list from the venue with NBSP +
+# hyphen, but sometimes emits a plain ASCII hyphen; the NBSP is normalized
+# before the split so one rule covers both.
 _YEAR_RE = re.compile(r",\s*((?:19|20|21)\d{2})\s*$")
+# A byline can end at the year with no venue at all ("L Muller - 2026").
+_BARE_YEAR_RE = re.compile(r"^((?:19|20|21)\d{2})$")
 _WS_RE = re.compile(r"\s+")
 _PUNCT_RE = re.compile(r"[^\w\s]", re.UNICODE)
 
@@ -81,10 +84,18 @@ def split_author_venue(line: str) -> tuple[list[str], str | None, int | None]:
     year: int | None = None
     venue: str | None = None
     if venue_part:
-        m = _YEAR_RE.search(venue_part)
-        if m:
-            year = int(m.group(1))
-            venue_part = venue_part[: m.start()]
+        venue_part = venue_part.strip()
+        bare = _BARE_YEAR_RE.match(venue_part)
+        if bare:
+            # "L Muller - 2026": the whole venue field is the year. Without
+            # this the year is lost and the filename becomes "???? - Title".
+            year = int(bare.group(1))
+            venue_part = ""
+        else:
+            m = _YEAR_RE.search(venue_part)
+            if m:
+                year = int(m.group(1))
+                venue_part = venue_part[: m.start()]
         venue = venue_part.replace("\u2026", "").strip(" ,") or None
 
     return authors, venue, year

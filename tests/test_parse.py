@@ -171,3 +171,73 @@ def test_alert_ids_differ_between_alerts(papers, qam):
 def test_unwrap_does_not_double_decode():
     wrapped = "https://scholar.google.com/scholar_url?url=https://ex.org/a%2520b&hl=en"
     assert unwrap_scholar_url(wrapped) == "https://ex.org/a%20b"
+
+
+# --- third alert: same query, later date ---------------------------------------
+#
+# NOTE: this fixture is ABRIDGED. The real email carried ten results; four are
+# kept here (the ones with distinctive shapes) and the tracking pixel was
+# adjusted to match. Treat it as a constructed case, not a verbatim capture.
+
+
+@pytest.fixture(scope="module")
+def qca2():
+    return parse_alert_email((DATA / "quantum-computer-architecture-2.eml").read_bytes())
+
+
+def test_qca2_result_count(qca2):
+    assert len(qca2) == 4
+
+
+def test_qca2_accented_venue_survives_charset_decoding(qca2):
+    assert qca2[0].venue == "Journal Européen des Systèmes Automatisés"
+    assert qca2[0].year == 2026
+
+
+def test_qca2_missing_snippet_is_none_not_stolen(qca2):
+    # This result has a byline but no gse_alrt_sni div at all. It must come
+    # back None rather than borrowing the next result's snippet.
+    p = qca2[1]
+    assert p.title.startswith("Quantum Machine Learning: Bridging")
+    assert p.snippet is None
+    assert p.authors[0] == "W Zhang"
+
+
+def test_qca2_missing_snippet_does_not_shift_later_results(qca2):
+    # The result after the snippet-less one must keep its own snippet.
+    assert "This paper investigates the integration" in qca2[2].snippet
+
+
+def test_qca2_ampersand_entity_in_title(qca2):
+    assert qca2[1].title.endswith("Quantum Computing & Machine Learning")
+
+
+def test_qca2_leading_quote_entity_in_title(qca2):
+    # Scholar emits a stray leading &quot; on this record.
+    assert qca2[2].title.startswith('" Navigating the Quantum Revolution')
+
+
+def test_qca2_bare_year_byline(qca2):
+    # "L Muller - 2026": plain ASCII hyphen, and the venue field is only a
+    # year. Getting this wrong names the file "???? - Title.pdf".
+    p = qca2[3]
+    assert p.authors == ["L Muller"]
+    assert p.venue is None
+    assert p.year == 2026
+
+
+def test_qca2_same_alert_id_as_first_fixture(papers, qca2):
+    # Same saved alert, different send date -- the id is stable over time.
+    assert qca2[0].alert_id == papers[0].alert_id
+
+
+@pytest.mark.parametrize(
+    "line,expected",
+    [
+        ("L Muller - 2026", (["L Muller"], None, 2026)),
+        ("A B\xa0- 2026 7th Intl Conf on Bio\xa0…, 2026", (["A B"], "2026 7th Intl Conf on Bio", 2026)),
+        ("A B\xa0- Journal 2026 Edition", (["A B"], "Journal 2026 Edition", None)),
+    ],
+)
+def test_split_author_venue_year_edge_cases(line, expected):
+    assert split_author_venue(line) == expected
