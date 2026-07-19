@@ -17,41 +17,7 @@ from paper_grabber.enrich import (
     title_similarity,
 )
 from paper_grabber.models import AlertPaper
-
-
-def make_client(handler, **kw):
-    """An OpenAlexClient whose transport is a callable, not a socket."""
-    transport = httpx.MockTransport(handler)
-    return OpenAlexClient(client=httpx.Client(transport=transport), **kw)
-
-
-def works_response(*results):
-    def handler(request):
-        return httpx.Response(200, json={"results": list(results)})
-
-    return handler
-
-
-def work(
-    *,
-    title="A Title",
-    year=2026,
-    doi="https://doi.org/10.1/abc",
-    is_oa=True,
-    pdf_url="https://ex.org/a.pdf",
-    abstract=None,
-):
-    return {
-        "id": "https://openalex.org/W1",
-        "display_name": title,
-        "publication_year": year,
-        "doi": doi,
-        "open_access": {"is_oa": is_oa, "oa_status": "green" if is_oa else "closed", "oa_url": None},
-        "best_oa_location": {"pdf_url": pdf_url, "landing_page_url": "https://ex.org/a"} if pdf_url else None,
-        "abstract_inverted_index": abstract,
-        "cited_by_count": 3,
-        "authorships": [{"author": {"display_name": "A Author"}}],
-    }
+from conftest import make_client, work, works_response
 
 
 # --- abstract reconstruction --------------------------------------------------

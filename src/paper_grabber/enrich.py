@@ -17,6 +17,7 @@ from typing import Any, Iterable
 
 import httpx
 
+from .cache import LookupCache
 from .models import AlertPaper, normalize_title
 
 OPENALEX_WORKS = "https://api.openalex.org/works"
@@ -41,6 +42,29 @@ def sanitize_search_value(value: str) -> str:
     """Strip characters OpenAlex would read as filter syntax."""
     # Collapse afterwards: "a, b" would otherwise become "a  b".
     return re.sub(r"\s+", " ", _FILTER_SYNTAX_RE.sub(" ", value)).strip()
+
+
+class RateLimited(Exception):
+    """OpenAlex refused the request for lack of budget.
+
+    Raised rather than returned: once the daily allowance is gone every
+    subsequent lookup fails identically, so a run should stop and keep what it
+    already has instead of grinding through the rest.
+    """
+
+    def __init__(self, message: str, *, retry_after: int | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+    @classmethod
+    def from_response(cls, response: httpx.Response) -> "RateLimited":
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        retry = body.get("retryAfter")
+        message = body.get("message") or "OpenAlex rate limit exceeded"
+        return cls(message, retry_after=int(retry) if retry else None)
 
 
 @dataclass
@@ -128,7 +152,7 @@ def _year_conflicts(alert_year: int | None, work_year: int | None) -> bool:
     return abs(alert_year - work_year) > 1
 
 
-def _direct_pdf_url(paper: AlertPaper) -> str | None:
+def direct_pdf_url(paper: AlertPaper) -> str | None:
     """Treat Scholar's own link as a PDF when it plainly is one.
 
     OpenAlex sometimes reports a work as closed while Scholar has already
@@ -166,7 +190,7 @@ def _pdf_candidates(work: dict[str, Any], paper: AlertPaper) -> list[str]:
         if pdf:
             urls.append(pdf)
 
-    scholar = _direct_pdf_url(paper)
+    scholar = direct_pdf_url(paper)
     if scholar:
         urls.append(scholar)
 
@@ -188,9 +212,11 @@ class OpenAlexClient:
         client: httpx.Client | None = None,
         timeout: float = 20.0,
         threshold: float = DEFAULT_MATCH_THRESHOLD,
+        cache: "LookupCache | None" = None,
     ) -> None:
         self.mailto = mailto or os.environ.get(_MAILTO_ENV)
         self.threshold = threshold
+        self.cache = cache
         self._client = client or httpx.Client(
             timeout=timeout,
             headers={"User-Agent": self._user_agent()},
@@ -220,14 +246,31 @@ class OpenAlexClient:
         return resp.json().get("results", [])
 
     def enrich(self, paper: AlertPaper) -> Enrichment:
-        """Look up one alert record and score the best candidate."""
+        """Look up one alert record and score the best candidate.
+
+        A cache hit costs nothing; a miss costs OpenAlex budget, so the cache
+        is consulted first and written on every outcome.
+        """
+        if self.cache is not None:
+            cached = self.cache.get(paper.title)
+            if cached is not None:
+                return Enrichment(**cached)
+
         try:
             candidates = self.search_by_title(paper.title)
+        except httpx.HTTPStatusError as exc:
+            # OpenAlex meters requests against a daily budget. A 429 is not a
+            # transient network blip: every later call in the run will fail the
+            # same way, and the caller needs to know to stop rather than churn
+            # through a hundred doomed lookups.
+            if exc.response.status_code == 429:
+                raise RateLimited.from_response(exc.response) from exc
+            return Enrichment(note=f"lookup failed: HTTP {exc.response.status_code}")
         except httpx.HTTPError as exc:
             return Enrichment(note=f"lookup failed: {type(exc).__name__}")
 
         if not candidates:
-            return Enrichment(note="no OpenAlex candidates")
+            return self._remember(paper, Enrichment(note="no OpenAlex candidates"))
 
         scored = [
             (title_similarity(paper.title, html.unescape(c.get("display_name") or "")), c)
@@ -245,7 +288,7 @@ class OpenAlexClient:
             if _year_conflicts(paper.year, cand.get("publication_year")):
                 rejected_on_year = True
                 continue
-            return self._from_work(cand, score, paper)
+            return self._remember(paper, self._from_work(cand, score, paper))
 
         best_score = scored[0][0] if scored else 0.0
         note = (
@@ -253,7 +296,14 @@ class OpenAlexClient:
             if rejected_on_year
             else f"best candidate scored {best_score:.2f} < {self.threshold}"
         )
-        return Enrichment(match_score=round(best_score, 3), note=note)
+        return self._remember(paper, Enrichment(match_score=round(best_score, 3), note=note))
+
+    def _remember(self, paper: AlertPaper, result: Enrichment) -> Enrichment:
+        """Persist an outcome so the next run does not pay for it again."""
+        if self.cache is not None:
+            payload = asdict(result)  # not to_dict(): pdf_url is derived
+            self.cache.put(paper.title, payload, matched=result.matched)
+        return result
 
     def _from_work(
         self, work: dict[str, Any], score: float, paper: AlertPaper

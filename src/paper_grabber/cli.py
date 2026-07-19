@@ -8,10 +8,12 @@ import sys
 import time
 from pathlib import Path
 
-from .enrich import OpenAlexClient
+from .cache import LookupCache
+from .enrich import Enrichment, OpenAlexClient, RateLimited, direct_pdf_url
 from .fetch import download_first_available, make_client
 from .filename import deduplicate_filename, pdf_filename
 from .parse import dedupe, parse_alert_email
+from .staging import StagingArea
 
 
 def _load(paths: list[Path], *, do_dedupe: bool = True):
@@ -28,17 +30,45 @@ def cmd_parse(args) -> int:
     return 0
 
 
+DEFAULT_CACHE = Path.home() / ".cache" / "paper-grabber" / "openalex.db"
+
+
+def _enrich_all(papers, args):
+    """Enrich every paper, stopping cleanly if the OpenAlex budget runs out.
+
+    Returns (pairs, exhausted). Papers looked up before the limit keep their
+    results; the rest come back bare rather than being lost.
+    """
+    cache = None if args.no_cache else LookupCache(args.cache)
+    pairs, exhausted = [], False
+    try:
+        with OpenAlexClient(mailto=args.mailto, cache=cache) as oa:
+            for i, paper in enumerate(papers):
+                if i:
+                    time.sleep(args.delay)
+                try:
+                    pairs.append((paper, oa.enrich(paper)))
+                except RateLimited as exc:
+                    exhausted = True
+                    wait = f" (retry in {exc.retry_after}s)" if exc.retry_after else ""
+                    print(
+                        f"\nOpenAlex budget exhausted after {len(pairs)} lookups{wait}:"
+                        f" {exc}\nContinuing with what was already resolved.",
+                        file=sys.stderr,
+                    )
+                    pairs.extend((p, Enrichment(note="not looked up: budget exhausted"))
+                                 for p in papers[i:])
+                    break
+    finally:
+        if cache is not None:
+            cache.close()
+    return pairs, exhausted
+
+
 def cmd_enrich(args) -> int:
     papers = _load(args.paths)
-    out = []
-    with OpenAlexClient(mailto=args.mailto) as client:
-        for i, paper in enumerate(papers):
-            if i:
-                # OpenAlex's polite pool allows far more than this; the pause
-                # is courtesy, not a limit we are near.
-                time.sleep(args.delay)
-            enrichment = client.enrich(paper)
-            out.append({"paper": paper.to_dict(), "enrichment": enrichment.to_dict()})
+    pairs, _ = _enrich_all(papers, args)
+    out = [{"paper": p.to_dict(), "enrichment": e.to_dict()} for p, e in pairs]
 
     if args.summary:
         _print_summary(out)
@@ -68,22 +98,23 @@ def _print_summary(rows: list[dict]) -> None:
 
 
 def cmd_download(args) -> int:
-    """Parse, enrich, and save every retrievable PDF into a directory.
+    """Parse, enrich, and stage every retrievable PDF.
 
-    This is the local stand-in for the eventual Drive upload: same naming, same
-    collision handling, just a local destination.
+    Files land in the staging directory and stay there. They are removed only
+    once Drive confirms receipt with a matching size and MD5 -- see
+    StagingArea.confirm -- so an upload that fails, or half-succeeds, never
+    costs us the only copy.
     """
-    args.dest.mkdir(parents=True, exist_ok=True)
+    staging = StagingArea(args.dest)
+    # An interrupted previous run may have left half-written files.
+    for leftover in staging.sweep_partials():
+        print(f"swept incomplete download: {leftover.name}")
+
     papers = _load(args.paths)
 
-    with OpenAlexClient(mailto=args.mailto) as oa:
-        enriched = []
-        for i, paper in enumerate(papers):
-            if i:
-                time.sleep(args.delay)
-            enriched.append((paper, oa.enrich(paper)))
+    enriched, _ = _enrich_all(papers, args)
 
-    taken = {p.name for p in args.dest.iterdir() if p.is_file()}
+    taken = {p.name for p in staging.pending()}
     saved = failed = skipped = 0
 
     with make_client() as http:
@@ -91,14 +122,20 @@ def cmd_download(args) -> int:
             title = e.title or paper.title
             year = e.year or paper.year
 
-            if not e.pdf_candidates:
+            # Scholar's own link is independent of OpenAlex, so it still
+            # works when enrichment was rate-limited, unmatched, or offline.
+            candidates = e.pdf_candidates or [
+                u for u in (direct_pdf_url(paper),) if u
+            ]
+
+            if not candidates:
                 skipped += 1
                 where = e.landing_url or paper.url
                 print(f"SKIP  {title[:58]}")
                 print(f"        no PDF location{f' -- open: {where}' if where else ''}")
                 continue
 
-            result = download_first_available(e.pdf_candidates, client=http)
+            result = download_first_available(candidates, client=http)
             if not result.ok:
                 failed += 1
                 print(f"FAIL  {title[:58]}")
@@ -107,11 +144,15 @@ def cmd_download(args) -> int:
 
             name = deduplicate_filename(pdf_filename(title, year), taken)
             taken.add(name)
-            (args.dest / name).write_bytes(result.content)
+            # Staged, not filed: the local copy is the only one until Drive
+            # confirms receipt, at which point staging.confirm() removes it.
+            staging.stage(name, result.content)
             saved += 1
-            print(f"SAVED {result.size / 1024:7.0f} KB  {name}")
+            print(f"STAGED {result.size / 1024:7.0f} KB  {name}")
 
-    print(f"\nsaved {saved} | failed {failed} | no PDF location {skipped}")
+    print(f"\nstaged {saved} | failed {failed} | no PDF location {skipped}")
+    if saved:
+        print(f"awaiting Drive upload in {staging.root}")
     return 0
 
 
@@ -129,13 +170,17 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--mailto", help="contact address for OpenAlex's polite pool")
     e.add_argument("--delay", type=float, default=0.15, help="seconds between requests")
     e.add_argument("--summary", action="store_true", help="human-readable table")
+    e.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
+    e.add_argument("--no-cache", action="store_true")
     e.set_defaults(func=cmd_enrich)
 
     d = sub.add_parser("download", help="parse, enrich, and save PDFs to a directory")
     d.add_argument("paths", nargs="+", type=Path)
-    d.add_argument("--dest", type=Path, required=True, help="destination directory")
+    d.add_argument("--dest", type=Path, required=True, help="staging directory")
     d.add_argument("--mailto", help="contact address for OpenAlex's polite pool")
     d.add_argument("--delay", type=float, default=0.15)
+    d.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
+    d.add_argument("--no-cache", action="store_true")
     d.set_defaults(func=cmd_download)
 
     args = ap.parse_args(argv)
