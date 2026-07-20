@@ -20,38 +20,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
-from .ledger import Decision, Ledger
+from .ledger import Decision, Ledger, paper_view
 
 STATIC = Path(__file__).parent / "static"
 
 
 class DecisionIn(BaseModel):
     decision: Decision
-
-
-def _paper_json(p) -> dict[str, Any]:
-    """Flatten a ledger row into what the page needs.
-
-    The abstract falls back to Scholar's snippet, and says which it is: the
-    user asked that a paper never be hidden for want of metadata, but a
-    two-line snippet should not masquerade as an abstract.
-    """
-    d = p.payload
-    enrichment = d.get("enrichment") or {}
-    abstract = enrichment.get("abstract")
-    return {
-        "key": p.key,
-        "title": p.title,
-        "authors": d.get("authors") or [],
-        "venue": d.get("venue"),
-        "year": enrichment.get("year") or d.get("year"),
-        "abstract": abstract or d.get("snippet"),
-        "abstract_is_snippet": not abstract,
-        "url": d.get("url"),
-        "alert_query": d.get("alert_query"),
-        "has_pdf": bool(enrichment.get("pdf_url")) or bool(d.get("has_pdf_badge")),
-        "doi": enrichment.get("doi"),
-    }
 
 
 def create_app(ledger_path: Path) -> FastAPI:
@@ -80,7 +55,7 @@ def create_app(ledger_path: Path) -> FastAPI:
     def pending() -> dict[str, Any]:
         with open_ledger() as led:
             return {
-                "papers": [_paper_json(p) for p in led.pending()],
+                "papers": [paper_view(p) for p in led.pending()],
                 "counts": led.counts(),
             }
 
@@ -97,6 +72,6 @@ def create_app(ledger_path: Path) -> FastAPI:
             paper = led.get(key)
             if paper is None:
                 raise HTTPException(status_code=404, detail="no such paper")
-            return _paper_json(paper)
+            return paper_view(paper)
 
     return app

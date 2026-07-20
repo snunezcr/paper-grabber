@@ -17,7 +17,7 @@ from .imap_source import (
     ImapError,
     check_login,
 )
-from .ledger import Decision, Ledger
+from .ledger import Decision, Ledger, paper_view
 from .models import AlertPaper
 from .google_auth import (
     DEFAULT_CREDENTIALS,
@@ -280,13 +280,15 @@ def cmd_pending(args) -> int:
     with Ledger(args.ledger) as ledger:
         rows = ledger.pending()
         for p in rows:
-            d = p.payload
-            year = d.get("year") or "????"
-            authors = ", ".join(d.get("authors") or []) or "(no authors)"
-            print(f"{year}  {p.title}")
-            print(f"        {authors}")
-            if d.get("snippet"):
-                print(f"        {d['snippet'][:100]}")
+            v = paper_view(p)
+            year = v["year"] or "????"
+            authors = ", ".join(v["authors"]) or "(no authors)"
+            flag = "PDF" if v["has_pdf"] else "   "
+            print(f"{year} [{flag}] {v['title']}")
+            print(f"           {authors}")
+            if v["abstract"]:
+                kind = "snippet" if v["abstract_is_snippet"] else "abstract"
+                print(f"           ({kind}) {v['abstract'][:110]}")
         print(f"\n{len(rows)} pending")
     return 0
 

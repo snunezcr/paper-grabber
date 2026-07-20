@@ -61,6 +61,34 @@ class LedgerPaper:
     decided_at: float | None = None
 
 
+def paper_view(p: LedgerPaper) -> dict[str, Any]:
+    """Flatten a ledger row into the fields every consumer wants.
+
+    Enrichment supersedes the alert record where both have a value, and the
+    abstract falls back to Scholar's snippet -- flagged, so a caller can say
+    which it is rather than passing two truncated lines off as an abstract.
+
+    Shared by the CLI and the web app deliberately: they showed different
+    years for the same paper when each did this itself.
+    """
+    d = p.payload
+    e = d.get("enrichment") or {}
+    abstract = e.get("abstract")
+    return {
+        "key": p.key,
+        "title": p.title,
+        "authors": e.get("authors") or d.get("authors") or [],
+        "venue": d.get("venue"),
+        "year": e.get("year") or d.get("year"),
+        "abstract": abstract or d.get("snippet"),
+        "abstract_is_snippet": not abstract,
+        "url": e.get("pdf_url") or d.get("url"),
+        "alert_query": d.get("alert_query"),
+        "has_pdf": bool(e.get("pdf_url")) or bool(d.get("has_pdf_badge")),
+        "doi": e.get("doi"),
+    }
+
+
 class Ledger:
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
