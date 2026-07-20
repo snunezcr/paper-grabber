@@ -241,9 +241,9 @@ def test_fetch_failure_is_reported():
         list(source.fetch_alerts())
 
 
-def test_login_failure_explains_app_password(monkeypatch):
+def _failing_login(monkeypatch, message):
     def boom(*a, **kw):
-        raise imaplib.IMAP4.error("AUTHENTICATIONFAILED")
+        raise imaplib.IMAP4.error(message)
 
     class FakeSSL:
         def __init__(self, host, port):
@@ -252,6 +252,41 @@ def test_login_failure_explains_app_password(monkeypatch):
         login = boom
 
     monkeypatch.setattr(imaplib, "IMAP4_SSL", FakeSSL)
-    source = ImapAlertSource(ImapConfig(user="u", password="wrong"))
-    with pytest.raises(ImapError, match="app password"):
+    return ImapAlertSource(ImapConfig(user="u@gmail.com", password="wrong"))
+
+
+@pytest.mark.parametrize(
+    "server_says,expected",
+    [
+        # The server's own wording is the only thing separating these causes.
+        (b"[ALERT] Application-specific password required", "app password"),
+        (b"[AUTHENTICATIONFAILED] Invalid credentials (Failure)", "wrong"),
+        (b"[ALERT] Web login required", "blocked the sign-in"),
+        (b"Something entirely new", "app password"),  # generic fallback
+    ],
+)
+def test_login_failure_explains_the_cause(monkeypatch, server_says, expected):
+    source = _failing_login(monkeypatch, server_says)
+    with pytest.raises(ImapError, match=expected):
         list(source.fetch_alerts())
+
+
+def test_login_failure_quotes_the_server(monkeypatch):
+    # Swallowing the server's text leaves the user guessing between causes.
+    source = _failing_login(monkeypatch, b"[AUTHENTICATIONFAILED] Invalid credentials")
+    with pytest.raises(ImapError, match="Server said:.*Invalid credentials"):
+        list(source.fetch_alerts())
+
+
+def test_login_failure_names_the_account(monkeypatch):
+    source = _failing_login(monkeypatch, b"nope")
+    with pytest.raises(ImapError, match="u@gmail.com"):
+        list(source.fetch_alerts())
+
+
+def test_login_failure_never_leaks_the_password(monkeypatch):
+    source = _failing_login(monkeypatch, b"nope")
+    try:
+        list(source.fetch_alerts())
+    except ImapError as exc:
+        assert "wrong" not in str(exc).replace("is wrong", "")

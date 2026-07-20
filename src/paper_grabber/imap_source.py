@@ -147,10 +147,7 @@ class ImapAlertSource:
         try:
             conn.login(self.config.user, self.config.password)
         except imaplib.IMAP4.error as exc:
-            raise ImapError(
-                "IMAP login failed. With 2-Step Verification enabled this must "
-                "be a 16-character app password, not the account password."
-            ) from exc
+            raise ImapError(_login_help(self.config.user, exc)) from exc
 
         try:
             yield conn
@@ -206,6 +203,49 @@ class ImapAlertSource:
                 if message_id in skip:
                     continue
                 yield RawMessage(message_id=message_id, raw=raw)
+
+
+# Google's rejection text distinguishes causes that otherwise look identical.
+_LOGIN_HINTS = (
+    (
+        "application-specific password required",
+        "2-Step Verification is on and this is the account password. Create an "
+        "app password at https://myaccount.google.com/apppasswords and use that.",
+    ),
+    (
+        "invalid credentials",
+        "The address or the app password is wrong. App passwords are 16 letters; "
+        "if one was revoked or regenerated, the old one stops working immediately.",
+    ),
+    (
+        "web login required",
+        "Google blocked the sign-in as suspicious. Open Gmail in a browser, "
+        "confirm it was you, then retry.",
+    ),
+    (
+        "lookup failed",
+        "The mailbox address was not recognised. Check PAPER_GRABBER_IMAP_USER.",
+    ),
+)
+
+
+def _login_help(user: str, exc: Exception) -> str:
+    """Explain a login rejection using what the server actually said.
+
+    The server's own text is the only thing that separates "wrong password"
+    from "app password required" from "sign-in blocked", so it is quoted rather
+    than replaced with a guess.
+    """
+    raw = str(exc).strip().strip("b'\"")
+    lowered = raw.lower()
+
+    hint = next(
+        (h for marker, h in _LOGIN_HINTS if marker in lowered),
+        "Check the address and app password. If 2-Step Verification is on, the "
+        "account password will not work -- it must be an app password from "
+        "https://myaccount.google.com/apppasswords.",
+    )
+    return f"IMAP login failed for {user}.\n  Server said: {raw}\n  {hint}"
 
 
 def _extract_body(payload) -> bytes | None:
