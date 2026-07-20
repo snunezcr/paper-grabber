@@ -74,6 +74,11 @@ class UploadIn(BaseModel):
     keys: list[str]
 
 
+class BulkDecisionIn(BaseModel):
+    keys: list[str]
+    decision: Decision
+
+
 def create_app(
     ledger_path: Path,
     *,
@@ -203,6 +208,21 @@ def create_app(
                     "folder_id": led.get_setting(SETTING_BASE_FOLDER_ID),
                     "folder_name": led.get_setting(SETTING_BASE_FOLDER_NAME),
                 },
+            }
+
+    @app.post("/api/decisions")
+    def bulk_decision(body: BulkDecisionIn) -> dict[str, Any]:
+        """Apply one decision to several papers at once."""
+        if not body.keys:
+            raise HTTPException(status_code=400, detail="no papers given")
+        with open_ledger() as led:
+            updated = [k for k in body.keys if led.decide_by_key(k, body.decision)]
+            if not updated:
+                raise HTTPException(status_code=404, detail="no such papers")
+            return {
+                "updated": updated,
+                "decision": body.decision.value,
+                "counts": led.counts(),
             }
 
     @app.get("/api/papers/{key}/bibtex")
@@ -481,6 +501,7 @@ def create_app(
                     "scope-check",
                     "bibtex",
                     "suggestions",
+                    "bulk-decision",
                 }
             ),
         }

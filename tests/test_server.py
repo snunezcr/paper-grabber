@@ -903,3 +903,74 @@ def test_search_and_alert_filter_compose(client):
 
 def test_empty_search_result_names_the_query(client):
     assert 'Nothing matches "${state.query}".' in client.get("/").text
+
+
+# --- bulk rejection from Filing -----------------------------------------------
+
+
+def test_bulk_reject_removes_papers_from_filing(app_client):
+    accept_all(app_client)
+    keys = [p["key"] for p in app_client.get("/api/accepted").json()["unfiled"]]
+    r = app_client.post("/api/decisions", json={"keys": keys, "decision": "rejected"})
+    assert r.status_code == 200
+    assert len(r.json()["updated"]) == len(keys)
+
+    acc = app_client.get("/api/accepted").json()
+    assert acc["unfiled"] == [] and acc["filed"] == []
+
+
+def test_bulk_reject_is_permanent_for_future_syncs(app_client, seeded):
+    accept_all(app_client)
+    key = app_client.get("/api/accepted").json()["unfiled"][0]["key"]
+    app_client.post("/api/decisions", json={"keys": [key], "decision": "rejected"})
+    with Ledger(seeded) as led:
+        paper = led.get(key)
+        assert paper.decision is Decision.REJECTED
+        # Re-recording must not resurrect it on the next check.
+        assert led.record(AlertPaper(title=paper.title)) is False
+
+
+def test_bulk_reject_can_be_undone(app_client):
+    accept_all(app_client)
+    keys = [p["key"] for p in app_client.get("/api/accepted").json()["unfiled"]]
+    app_client.post("/api/decisions", json={"keys": keys, "decision": "rejected"})
+    app_client.post("/api/decisions", json={"keys": keys, "decision": "accepted"})
+    assert len(app_client.get("/api/accepted").json()["unfiled"]) == len(keys)
+
+
+def test_bulk_decision_with_no_keys_is_refused(app_client):
+    r = app_client.post("/api/decisions", json={"keys": [], "decision": "rejected"})
+    assert r.status_code == 400
+
+
+def test_bulk_decision_with_unknown_keys_is_404(app_client):
+    r = app_client.post("/api/decisions", json={"keys": ["nope"], "decision": "rejected"})
+    assert r.status_code == 404
+
+
+def test_bulk_decision_rejects_an_invalid_value(app_client, seeded):
+    accept_all(app_client)
+    key = app_client.get("/api/accepted").json()["unfiled"][0]["key"]
+    r = app_client.post("/api/decisions", json={"keys": [key], "decision": "maybe"})
+    assert r.status_code == 422
+
+
+def test_reject_button_sits_between_select_all_and_file(client):
+    import re
+
+    bar = client.get("/").text.split('<div id="filebar"')[1].split("</div>")[0]
+    assert re.findall(r'id="(selall|selreject|filesel)"', bar) == [
+        "selall", "selreject", "filesel"]
+
+
+def test_reject_button_uses_the_palette_reject_colour(client):
+    body = client.get("/").text
+    rule = body.split("#filebar button.danger")[1].split("}")[0]
+    assert "var(--reject)" in rule
+
+
+def test_bulk_rejection_offers_an_undo(client):
+    # Rejected papers are suppressed on every future check; a mis-tap here
+    # would bury them silently.
+    body = client.get("/").text
+    assert "state.lastUndo = {keys:" in body

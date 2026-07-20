@@ -282,6 +282,9 @@
     font-size: .95rem; cursor: pointer;
   }
   #filebar button.ghost { background: none; color: var(--ink); border-color: var(--line); }
+  #filebar button.danger {
+    background: none; color: var(--reject); border-color: var(--reject);
+  }
 
   /* folder picker sheet */
   #sheet {
@@ -439,6 +442,7 @@
 <div id="filebar" hidden>
   <span class="count" id="selcount">0 selected</span>
   <button class="ghost" id="selall">Select all</button>
+  <button class="danger" id="selreject">Reject</button>
   <button id="filesel">File to…</button>
 </div>
 
@@ -475,7 +479,7 @@ let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               query: '', suggestions: {} };
 
 // Capabilities this page expects the server to have.
-const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions'];
+const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision'];
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -612,8 +616,25 @@ async function decide(el, paper, decision) {
 }
 
 $('#undo').addEventListener('click', async () => {
-  const paper = state.lastUndo;
-  if (!paper) return;
+  const pending = state.lastUndo;
+  if (!pending) return;
+
+  // A bulk rejection from Filing restores several papers at once.
+  if (pending.keys) {
+    try {
+      const data = await api('/api/decisions', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({keys: pending.keys, decision: pending.decision})
+      });
+      showCounts(data.counts);
+      state.lastUndo = null;
+      $('#undo').hidden = true;
+      loadFiling();
+    } catch (e) { showError(`Could not undo: ${e.message}`); }
+    return;
+  }
+
+  const paper = pending;
   try {
     const data = await api(`/api/papers/${encodeURIComponent(paper.key)}/decision`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -979,6 +1000,7 @@ function refreshFileBar() {
   const n = state.selected.size;
   $('#selcount').textContent = `${n} selected`;
   $('#filesel').disabled = n === 0;
+  $('#selreject').disabled = n === 0;
   $('#filebar').hidden = !(state.tab === 'filing' && $('#unfiled').children.length);
 }
 
@@ -1092,6 +1114,26 @@ $('#selall').addEventListener('click', () => {
   boxes.forEach(b => { b.checked = !all; b.dispatchEvent(new Event('change')); });
 });
 
+$('#selreject').addEventListener('click', async () => {
+  const keys = [...state.selected];
+  if (!keys.length) return;
+  try {
+    const data = await api('/api/decisions', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({keys, decision: 'rejected'})
+    });
+    showCounts(data.counts);
+    state.selected.clear();
+    // Rejected papers are suppressed on every future check, so a mis-tap here
+    // would bury them silently. One tap puts them back.
+    state.lastUndo = {keys: data.updated, decision: 'accepted',
+                      label: `${data.updated.length} rejected`};
+    $('#undo').hidden = false;
+    showNotice(`${data.updated.length} rejected`);
+    loadFiling();
+  } catch (e) { showError(`Could not reject: ${e.message}`); }
+});
+
 $('#filesel').addEventListener('click', () => {
   if (!state.base?.folder_id) {
     showError('Set a base folder first.');
@@ -1200,7 +1242,9 @@ function selectTab(tab) {
     $(`#tab-${name}`).setAttribute('aria-selected', tab === name);
     $(`#view-${name}`).hidden = tab !== name;
   }
-  $('#undo').hidden = tab !== 'triage' || !state.lastUndo;
+  // Undo follows whichever view produced it.
+  $('#undo').hidden = !state.lastUndo
+    || (state.lastUndo.keys ? tab !== 'filing' : tab !== 'triage');
   syncSidebarVisibility();
   refreshFileBar();
   if (tab === 'filing') loadFiling();
