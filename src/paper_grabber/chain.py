@@ -11,6 +11,11 @@ Order matters and is not arbitrary:
 3. **Unpaywall** last, and only to fill in PDF locations for a DOI the earlier
    steps produced. It is the authority on where an open-access copy lives.
 
+Abstracts get their own fallback chain (see abstracts.py), because neither
+OpenAlex nor Crossref reliably has one: publishers suppress them, and Crossref
+only carries what was deposited. Without it most papers can only be judged from
+Scholar's two-line snippet.
+
 Scholar's own link is always kept as a final PDF candidate: it is independent
 of all three and often points straight at an arXiv PDF.
 """
@@ -33,10 +38,16 @@ class EnrichmentChain:
         openalex: Any | None = None,
         crossref: Any | None = None,
         unpaywall: Any | None = None,
+        arxiv: Any | None = None,
+        semantic_scholar: Any | None = None,
+        page_meta: Any | None = None,
     ) -> None:
         self.openalex = openalex
         self.crossref = crossref
         self.unpaywall = unpaywall
+        self.arxiv = arxiv
+        self.semantic_scholar = semantic_scholar
+        self.page_meta = page_meta
         # Once the budget is gone every later call fails identically, so stop
         # asking rather than spending a request per paper to be told again.
         self.openalex_exhausted = False
@@ -52,7 +63,42 @@ class EnrichmentChain:
                 result = fallback
 
         result = self._add_oa_locations(paper, result)
+        result = self._add_abstract(paper, result)
         return result
+
+    def _add_abstract(self, paper: AlertPaper, result: Enrichment) -> Enrichment:
+        """Recover an abstract when the metadata sources had none.
+
+        Cheapest first: an exact arXiv lookup, then Semantic Scholar if a key
+        is configured, then a full page fetch as a last resort.
+        """
+        if result.abstract:
+            return result
+
+        from .abstracts import arxiv_id_of
+
+        found = None
+
+        arxiv_id = arxiv_id_of(paper.url) or arxiv_id_of(result.pdf_url)
+        if arxiv_id and self.arxiv is not None:
+            found = self.arxiv.fetch([arxiv_id]).get(arxiv_id)
+
+        if found is None and result.doi and self.semantic_scholar is not None:
+            if getattr(self.semantic_scholar, "usable", True):
+                found = self.semantic_scholar.fetch_one(result.doi)
+
+        if found is None and self.page_meta is not None:
+            page = result.landing_url or paper.url
+            if page:
+                found = self.page_meta.fetch_one(page)
+
+        if found is None:
+            return result
+
+        note = result.note
+        marker = f"abstract via {found.source}"
+        note = f"{note}; {marker}" if note else marker
+        return replace(result, abstract=found.text, note=note)
 
     def _primary(self, paper: AlertPaper) -> Enrichment:
         if self.openalex is None or self.openalex_exhausted:
@@ -82,7 +128,14 @@ class EnrichmentChain:
         return replace(result, pdf_candidates=candidates)
 
     def close(self) -> None:
-        for client in (self.openalex, self.crossref, self.unpaywall):
+        for client in (
+            self.openalex,
+            self.crossref,
+            self.unpaywall,
+            self.arxiv,
+            self.semantic_scholar,
+            self.page_meta,
+        ):
             if client is not None and hasattr(client, "close"):
                 client.close()
 
@@ -101,16 +154,25 @@ def build_chain(
     use_openalex: bool = True,
     use_crossref: bool = True,
     use_unpaywall: bool = True,
+    backfill_abstracts: bool = True,
 ) -> EnrichmentChain:
     """Assemble the default chain.
 
     Unpaywall is skipped without a contact address: it requires one, and a
     request without it is rejected rather than merely impolite.
     """
+    from .abstracts import (
+        ArxivAbstracts,
+        PageMetaAbstracts,
+        SemanticScholarAbstracts,
+    )
     from .enrich import OpenAlexClient
     from .providers import CrossrefClient, UnpaywallClient
 
     return EnrichmentChain(
+        arxiv=ArxivAbstracts() if backfill_abstracts else None,
+        semantic_scholar=SemanticScholarAbstracts() if backfill_abstracts else None,
+        page_meta=PageMetaAbstracts() if backfill_abstracts else None,
         openalex=(
             OpenAlexClient(mailto=mailto, cache=cache, api_key=api_key)
             if use_openalex

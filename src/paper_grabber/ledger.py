@@ -239,6 +239,20 @@ class Ledger:
         self._db.commit()
         return True
 
+    def needing_abstract(self) -> list[LedgerPaper]:
+        """Undecided papers that have been enriched but still have no abstract.
+
+        Distinct from needing_enrichment: these already carry a DOI and OA
+        data, so re-running the full lookup would spend budget to learn
+        nothing. Only the abstract is missing.
+        """
+        return [
+            p
+            for p in self.pending()
+            if p.payload.get("enrichment")
+            and not (p.payload["enrichment"] or {}).get("abstract")
+        ]
+
     def needing_enrichment(self) -> list[LedgerPaper]:
         """Pending papers that have not been looked up yet."""
         return [p for p in self.pending() if not p.payload.get("enrichment")]

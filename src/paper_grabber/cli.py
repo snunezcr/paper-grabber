@@ -338,6 +338,80 @@ def cmd_enrich_pending(args) -> int:
     return 0
 
 
+def cmd_backfill_abstracts(args) -> int:
+    """Recover abstracts for papers that have everything except one.
+
+    Separate from enrich-pending because those papers are already enriched:
+    re-running the metadata lookup would spend OpenAlex budget to learn
+    nothing, when all that is missing is the abstract.
+    """
+    from .abstracts import (
+        ArxivAbstracts,
+        PageMetaAbstracts,
+        SemanticScholarAbstracts,
+        arxiv_id_of,
+    )
+
+    with Ledger(args.ledger) as ledger:
+        todo = ledger.needing_abstract()
+        if args.limit:
+            todo = todo[: args.limit]
+        if not todo:
+            print("every paper already has an abstract")
+            return 0
+
+        arxiv = ArxivAbstracts()
+        s2 = SemanticScholarAbstracts()
+        meta = PageMetaAbstracts() if not args.no_page_fetch else None
+
+        # One batched request covers every arXiv paper.
+        ids = {}
+        for entry in todo:
+            url = entry.payload.get("url") or ""
+            enrichment = entry.payload.get("enrichment") or {}
+            found_id = arxiv_id_of(url) or arxiv_id_of(enrichment.get("pdf_url"))
+            if found_id:
+                ids[entry.key] = found_id
+        by_id = arxiv.fetch(ids.values()) if ids else {}
+
+        counts = {}
+        try:
+            for entry in todo:
+                enrichment = dict(entry.payload.get("enrichment") or {})
+                found = by_id.get(ids.get(entry.key, ""))
+
+                if found is None and enrichment.get("doi") and s2.usable:
+                    found = s2.fetch_one(enrichment["doi"])
+
+                if found is None and meta is not None:
+                    page = enrichment.get("landing_url") or entry.payload.get("url")
+                    if page:
+                        found = meta.fetch_one(page)
+
+                if found is None:
+                    counts["none"] = counts.get("none", 0) + 1
+                    print(f"  --   {entry.title[:60]}")
+                    continue
+
+                enrichment["abstract"] = found.text
+                ledger.attach_enrichment(entry.key, enrichment)
+                counts[found.source] = counts.get(found.source, 0) + 1
+                print(f"  {found.source[:12]:12} {entry.title[:56]}")
+        finally:
+            for client in (arxiv, s2, meta):
+                if client is not None:
+                    client.close()
+
+        got = sum(v for k, v in counts.items() if k != "none")
+        print(f"\nrecovered {got}/{len(todo)}")
+        for source, n in sorted(counts.items(), key=lambda kv: -kv[1]):
+            if source != "none":
+                print(f"  {n:3} via {source}")
+        if counts.get("none"):
+            print(f"  {counts['none']:3} still without one")
+    return 0
+
+
 def cmd_serve(args) -> int:
     """Run the triage web app."""
     import uvicorn
@@ -612,6 +686,14 @@ def main(argv: list[str] | None = None) -> int:
     ep.add_argument("--no-openalex", action="store_true",
                    help="skip OpenAlex entirely; use only the free sources")
     ep.set_defaults(func=cmd_enrich_pending)
+
+    ba = sub.add_parser("backfill-abstracts",
+                        help="recover abstracts for papers that lack one")
+    ba.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
+    ba.add_argument("--limit", type=int)
+    ba.add_argument("--no-page-fetch", action="store_true",
+                    help="skip fetching publisher pages (faster, lower coverage)")
+    ba.set_defaults(func=cmd_backfill_abstracts)
 
     sv = sub.add_parser("serve", help="run the triage web app")
     sv.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
