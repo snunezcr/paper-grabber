@@ -119,6 +119,11 @@
   .filed-actions { margin-top: .5rem; }
   .filed-actions button { min-height: 44px; font-size: .9rem; }
   .filed-actions .up { border-color: var(--accept); color: var(--accept); }
+  .filed-actions .cardstatus {
+    display: inline-flex; align-items: center; font-size: .85rem;
+    color: var(--muted); padding-left: .3rem;
+  }
+  .filed-actions .cardstatus.bad { color: var(--reject); }
   .filed-actions .done {
     color: var(--accept); font-size: .85rem; font-weight: 600;
     display: inline-flex; align-items: center; min-height: 44px;
@@ -376,6 +381,7 @@ async function loadTriage() {
 function filingCard(p, {selectable}) {
   const el = document.createElement('article');
   el.className = 'card';
+  el.dataset.key = p.key;
   const inner = document.createElement('div');
   inner.className = 'pick';
   inner.innerHTML = `
@@ -400,9 +406,10 @@ function filingCard(p, {selectable}) {
       actions.innerHTML = '<span class="done">In Drive</span>';
     } else {
       actions.innerHTML = `
-        <button class="up">Upload${p.staged ? '' : ' &amp; fetch'}</button>
-        <button class="unfile">Not yet</button>`;
-      actions.querySelector('.up').addEventListener('click', ev => uploadOne(p, ev.target));
+        <button class="up">Upload</button>
+        <button class="unfile">Not yet</button>
+        <span class="cardstatus" hidden></span>`;
+      actions.querySelector('.up').addEventListener('click', () => uploadOne(p, el));
       actions.querySelector('.unfile').addEventListener('click', () => unfile(p));
     }
     el.querySelector('.pick > div:last-child').appendChild(actions);
@@ -421,9 +428,25 @@ async function unfile(paper) {
   } catch (e) { showError(`Could not unfile: ${e.message}`); }
 }
 
-async function uploadOne(paper, button) {
+function cardStatus(card, text, {bad = false} = {}) {
+  // Shown on the card itself. A message at the top of the page is invisible
+  // when you are scrolled down among the cards, which makes a slow upload
+  // look like a button that does nothing.
+  const el = card.querySelector('.cardstatus');
+  if (!el) return;
+  el.textContent = text;
+  el.hidden = !text;
+  el.classList.toggle('bad', bad);
+}
+
+async function uploadOne(paper, card) {
+  const button = card.querySelector('.up');
   button.disabled = true;
-  button.textContent = 'Uploading…';
+  card.querySelector('.unfile').disabled = true;
+  // Say what is actually happening: an unfetched paper downloads first, which
+  // is most of the wait.
+  cardStatus(card, paper.staged ? 'Uploading…' : 'Downloading, then uploading…');
+  state.uploading = paper.key;
   try {
     await api('/api/upload', {
       method: 'POST',
@@ -433,28 +456,44 @@ async function uploadOne(paper, button) {
     pollUpload();
   } catch (e) {
     button.disabled = false;
-    button.textContent = 'Upload';
-    showError(`Could not start upload: ${e.message}`);
+    card.querySelector('.unfile').disabled = false;
+    cardStatus(card, `Could not start: ${e.message}`, {bad: true});
+    state.uploading = null;
   }
 }
 
 async function pollUpload() {
   try {
     const s = await api('/api/upload');
-    if (s.running) { setTimeout(pollUpload, 1500); return; }
+    if (s.running) { setTimeout(pollUpload, 1200); return; }
+
     const r = s.last;
-    if (r) {
-      for (const o of r.outcomes || []) {
-        const where = o.folder ? ` -> ${o.folder}` : '';
-        if (o.ok) showNotice(`${o.detail}${where}: ${o.title.slice(0, 44)}`);
-        else showError(`${o.title.slice(0, 40)}: ${o.detail}`);
-      }
-      if (r.error) showError(r.error);
+    const failures = (r?.outcomes || []).filter(o => !o.ok);
+    state.lastUploadFailures = Object.fromEntries(
+      failures.map(o => [o.key, o.detail])
+    );
+    state.uploading = null;
+
+    if (r?.error) showError(r.error);
+    for (const o of (r?.outcomes || [])) {
+      if (o.ok) showNotice(`${o.detail}${o.folder ? ` → ${o.folder}` : ''}: ${o.title.slice(0, 40)}`);
     }
-    loadFiling();
+    // Re-render, then paint any failure onto the card it belongs to so the
+    // reason survives the refresh.
+    await loadFiling();
+    paintUploadFailures();
   } catch (e) {
+    state.uploading = null;
     showError(`Could not read upload status: ${e.message}`);
     loadFiling();
+  }
+}
+
+function paintUploadFailures() {
+  const failures = state.lastUploadFailures || {};
+  for (const card of $('#filed').children) {
+    const detail = failures[card.dataset.key];
+    if (detail) cardStatus(card, detail, {bad: true});
   }
 }
 

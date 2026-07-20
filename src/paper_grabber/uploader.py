@@ -15,6 +15,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+import sys
+
 from .jobs import BackgroundRunner
 
 
@@ -188,6 +190,15 @@ def make_upload_job(
                         pass
 
         result.finished_at = time.time()
+        # Echo to the server's terminal: a failure that only ever appears in a
+        # browser is hard to report and harder to diagnose.
+        for outcome in result.outcomes:
+            mark = "OK  " if outcome.ok else "FAIL"
+            where = f" -> {outcome.folder}" if outcome.folder else ""
+            print(
+                f"[upload] {mark} {outcome.title[:52]}{where}: {outcome.detail}",
+                file=sys.stderr,
+            )
         return result
 
     return job
