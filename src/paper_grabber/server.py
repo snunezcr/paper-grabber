@@ -54,7 +54,7 @@ class NewFolderIn(BaseModel):
 
 
 def create_app(ledger_path: Path, *, drive_factory=None) -> FastAPI:
-    app = FastAPI(title="paper-grabber", docs_url=None, redoc_url=None)
+    app = FastAPI(title="Research Stream", docs_url=None, redoc_url=None)
 
     def open_ledger() -> Ledger:
         # SQLite connections are not shareable across threads, so each request

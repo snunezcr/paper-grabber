@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#1a1a1a">
 <link rel="manifest" href="/manifest.webmanifest">
-<title>paper-grabber</title>
+<title>Research Stream</title>
 <style>
   /* Sized for a Tab S10 in either orientation. Touch targets are 48px
      minimum; primary actions sit at the bottom of a card or pinned to the
@@ -149,7 +149,7 @@
 <body>
 <header>
   <div class="titlebar">
-    <h1>paper-grabber</h1>
+    <h1>Research Stream</h1>
     <span id="counts"></span>
   </div>
   <nav>
@@ -228,7 +228,8 @@ function showError(msg) {
 
 function showCounts(c) {
   $('#counts').textContent =
-    `${c.pending || 0} pending · ${c.accepted || 0} accepted · ${c.rejected || 0} rejected`;
+    `${c.pending || 0} pending · ${c.accepted || 0} accepted · ` +
+    `${c.rejected || 0} rejected · ${c.filed || 0} filed`;
   $('#badge-triage').textContent = c.pending || 0;
 }
 

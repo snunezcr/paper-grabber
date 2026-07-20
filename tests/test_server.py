@@ -360,3 +360,38 @@ def test_triage_works_without_drive_credentials(seeded):
     c = TestClient(create_app(seeded))
     assert c.get("/api/pending").status_code == 200
     assert c.get("/api/accepted").status_code == 200
+
+
+# --- naming and counts --------------------------------------------------------
+
+
+def test_page_is_titled_research_stream(client):
+    body = client.get("/").text
+    assert "<title>Research Stream</title>" in body
+    assert "<h1>Research Stream</h1>" in body
+
+
+def test_manifest_names_the_app_research_stream(client):
+    m = client.get("/manifest.webmanifest").json()
+    assert m["name"] == "Research Stream"
+    assert m["short_name"] == "Research Stream"
+
+
+def test_counts_include_filed(client):
+    c = client.get("/api/pending").json()["counts"]
+    assert c["filed"] == 0
+
+
+def test_filed_count_rises_when_a_destination_is_chosen(app_client):
+    accept_all(app_client)
+    keys = [p["key"] for p in app_client.get("/api/accepted").json()["unfiled"]]
+    app_client.post("/api/destination",
+                    json={"keys": keys[:1], "folder_id": "QUANTUM", "folder_name": "Quantum"})
+    assert app_client.get("/api/pending").json()["counts"]["filed"] == 1
+
+
+def test_counts_line_renders_all_four(client):
+    # The header shows pending, accepted, rejected, then filed.
+    body = client.get("/").text
+    for word in ("pending", "accepted", "rejected", "filed"):
+        assert word in body

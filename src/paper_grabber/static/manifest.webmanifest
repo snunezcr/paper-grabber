@@ -1,6 +1,6 @@
 {
-  "name": "paper-grabber",
-  "short_name": "papers",
+  "name": "Research Stream",
+  "short_name": "Research Stream",
   "description": "Triage Google Scholar alert recommendations",
   "start_url": "/",
   "display": "standalone",

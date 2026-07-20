@@ -99,7 +99,8 @@ def test_counts_by_decision(ledger):
     ledger.record(paper(title="C"))
     ledger.decide("A", Decision.ACCEPTED)
     ledger.decide("B", Decision.REJECTED)
-    assert ledger.counts() == {"accepted": 1, "rejected": 1, "pending": 1}
+    # "filed" rides along with the decision counts; nothing is filed yet.
+    assert ledger.counts() == {"accepted": 1, "rejected": 1, "pending": 1, "filed": 0}
 
 
 def test_unknown_paper_has_no_decision(ledger):
@@ -265,3 +266,26 @@ def test_existing_ledger_gains_the_new_columns(tmp_path):
         assert [p.title for p in led.accepted()] == ["Old Paper"]
         assert led.set_destination("k", "F1", "Dest")
         assert led.accepted(filed=True)[0].dest_folder_name == "Dest"
+
+
+def test_filed_count_tracks_destinations(ledger):
+    for t in ("A", "B"):
+        ledger.record(paper(title=t))
+        ledger.decide(t, Decision.ACCEPTED)
+    assert ledger.counts()["filed"] == 0
+
+    keys = {p.title: p.key for p in ledger.accepted()}
+    ledger.set_destination(keys["A"], "F1", "Folder One")
+    assert ledger.counts()["filed"] == 1
+
+    ledger.set_destination(keys["B"], "F1", "Folder One")
+    assert ledger.counts()["filed"] == 2
+
+
+def test_filed_counts_only_accepted_papers(ledger):
+    # A destination on a rejected paper must not inflate the filed count.
+    ledger.record(paper(title="A"))
+    key = ledger.pending()[0].key
+    ledger.set_destination(key, "F1", "One")
+    ledger.decide("A", Decision.REJECTED)
+    assert ledger.counts()["filed"] == 0

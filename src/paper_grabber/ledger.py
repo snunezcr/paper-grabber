@@ -283,10 +283,20 @@ class Ledger:
         return [self._row(r) for r in rows]
 
     def counts(self) -> dict[str, int]:
+        """Papers by decision, plus how many have a destination chosen.
+
+        "filed" is not a fourth decision -- it is a subset of accepted -- but
+        the UI wants both in one payload, so it rides along here.
+        """
         rows = self._db.execute(
             "SELECT decision, COUNT(*) FROM papers GROUP BY decision"
         ).fetchall()
-        return {d: n for d, n in rows}
+        counts = {d: n for d, n in rows}
+        counts["filed"] = self._db.execute(
+            "SELECT COUNT(*) FROM papers WHERE decision = ? AND dest_folder_id IS NOT NULL",
+            (Decision.ACCEPTED.value,),
+        ).fetchone()[0]
+        return counts
 
     @staticmethod
     def _row(r) -> LedgerPaper:
