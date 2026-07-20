@@ -342,3 +342,57 @@ def test_each_sign_in_gets_its_own_verifier(paths):
     o.start("http://localhost:8823" + CALLBACK_PATH)
     verifiers = {p.code_verifier for p in o._pending.values()}
     assert len(verifiers) == 2
+
+
+# --- returning to the app -----------------------------------------------------
+
+
+def test_successful_callback_redirects_back_to_the_app(paths, tmp_path, monkeypatch):
+    # A "you may close this tab" page replaces the application, stranding the
+    # user. Success must land them back where they started.
+    creds, token = paths
+    write_client_secrets(creds)
+    o = WebOAuth(credentials_path=creds, token_path=token)
+    monkeypatch.setattr(o, "finish", lambda **kw: None)
+
+    c = TestClient(create_app(tmp_path / "s.db", oauth=o), base_url="http://localhost:8823")
+    r = c.get(CALLBACK_PATH, params={"state": "s", "code": "c"}, follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/?signed_in=1"
+
+
+def test_failed_callback_shows_a_page_with_a_way_back(client):
+    c, creds, _ = client
+    write_client_secrets(creds)
+    r = c.get(CALLBACK_PATH, params={"state": "unknown", "code": "c"})
+    assert r.status_code == 200
+    assert 'href="/"' in r.text
+    assert "state not recognised" in r.text
+
+
+def test_google_error_is_shown_not_redirected(client):
+    c, _, _ = client
+    r = c.get(CALLBACK_PATH, params={"error": "access_denied"}, follow_redirects=False)
+    assert r.status_code == 200
+    assert "access_denied" in r.text
+
+
+def test_failure_page_escapes_the_message(client):
+    c, _, _ = client
+    r = c.get(CALLBACK_PATH, params={"error": "<script>alert(1)</script>"})
+    assert "<script>alert(1)</script>" not in r.text
+    assert "&lt;script&gt;" in r.text
+
+
+def test_failure_page_is_self_contained(client):
+    c, _, _ = client
+    body = c.get(CALLBACK_PATH, params={"error": "x"}).text
+    assert "https://cdn" not in body and "//unpkg" not in body
+
+
+def test_app_page_clears_the_signed_in_parameter(client):
+    c, _, _ = client
+    # The page strips ?signed_in=1 via history.replaceState so a reload does
+    # not repeat the confirmation.
+    assert "signed_in" in c.get("/").text
+    assert "replaceState" in c.get("/").text

@@ -13,6 +13,7 @@ tap never waits on a 30 MB download.
 from __future__ import annotations
 
 import json
+from html import escape as html_escape
 from pathlib import Path
 from typing import Any
 
@@ -252,15 +253,24 @@ def create_app(ledger_path: Path, *, drive_factory=None, oauth: WebOAuth | None 
         except OAuthError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    @app.get(CALLBACK_PATH, response_class=HTMLResponse)
-    def auth_callback(request: Request, state: str = "", error: str = "") -> str:
+    @app.get(CALLBACK_PATH)
+    def auth_callback(request: Request, state: str = "", error: str = ""):
+        """Land the user back in the app rather than on an interstitial.
+
+        Sign-in is a same-tab navigation, so there is no opener to postMessage
+        and nothing to close -- a "you may now close this tab" page simply
+        replaces the application. On success we redirect straight back; only a
+        failure gets a page, because a failure has something worth reading.
+        """
         if error:
-            return _closing_page(f"Google reported: {error}", ok=False)
+            return HTMLResponse(_failure_page(f"Google reported: {error}"))
         try:
             auth.finish(state=state, full_url=str(request.url))
         except OAuthError as exc:
-            return _closing_page(str(exc), ok=False)
-        return _closing_page("Signed in. You can close this tab.", ok=True)
+            return HTMLResponse(_failure_page(str(exc)))
+        # 303: the callback was a GET, and this must not be re-submitted if the
+        # user reloads -- the authorization code is single-use.
+        return RedirectResponse("/?signed_in=1", status_code=303)
 
     @app.post("/api/auth/signout")
     def auth_signout() -> dict[str, bool]:
@@ -269,22 +279,36 @@ def create_app(ledger_path: Path, *, drive_factory=None, oauth: WebOAuth | None 
     return app
 
 
-def _closing_page(message: str, *, ok: bool) -> str:
-    """A minimal result page for the OAuth round trip.
+def _failure_page(message: str) -> str:
+    """Shown only when sign-in failed, with a way back.
 
-    Self-contained like the rest of the app: no CDN, and it tells the opener to
-    refresh so the sign-in state updates without the user hunting for a button.
+    Self-contained like the rest of the app, and light/dark aware so it does
+    not flash white on a tablet at night.
     """
-    colour = "#1a7f4b" if ok else "#a33"
-    return f"""<!doctype html><html><head><meta charset="utf-8">
+    safe = html_escape(message)
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Research Stream</title></head>
-<body style="font:16px/1.6 system-ui,sans-serif;margin:0;display:grid;
-place-items:center;height:100vh;padding:1.5rem;text-align:center">
-<div><p style="color:{colour};font-weight:600">{message}</p>
-<p style="color:#6b6b6b;font-size:.9rem">You can return to the app.</p></div>
-<script>
-  try {{ if (window.opener) {{ window.opener.postMessage('auth-changed', '*'); }} }} catch (e) {{}}
-  setTimeout(() => {{ try {{ window.close(); }} catch (e) {{}} }}, {1200 if ok else 6000});
-</script>
-</body></html>"""
+<title>Research Stream</title>
+<style>
+  :root {{ color-scheme: light dark; --bg:#fbfbfa; --ink:#1a1a1a;
+           --muted:#6b6b6b; --bad:#a33; --accent:#2b5fd9; --line:#e4e4e1; }}
+  @media (prefers-color-scheme: dark) {{
+    :root {{ --bg:#17181a; --ink:#eceff1; --muted:#9aa0a6;
+             --bad:#e2726e; --accent:#7aa2f7; --line:#303338; }}
+  }}
+  body {{ margin:0; background:var(--bg); color:var(--ink); padding:1.5rem;
+          font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+          display:grid; place-items:center; min-height:100vh; }}
+  .box {{ max-width:32rem; text-align:center; }}
+  h1 {{ font-size:1.05rem; margin:0 0 .75rem; color:var(--bad); }}
+  p.detail {{ color:var(--muted); font-size:.92rem;
+              word-break:break-word; margin:0 0 1.5rem; }}
+  a.back {{ display:inline-flex; align-items:center; min-height:48px;
+            padding:0 1.2rem; border:1px solid var(--accent); border-radius:10px;
+            color:var(--accent); text-decoration:none; font-weight:600; }}
+</style></head>
+<body><div class="box">
+  <h1>Sign-in did not complete</h1>
+  <p class="detail">{safe}</p>
+  <a class="back" href="/">Back to Research Stream</a>
+</div></body></html>"""

@@ -147,6 +147,11 @@
 
   #empty, #error, .note { text-align: center; color: var(--muted); padding: 2.5rem 1rem; }
   #error { color: var(--reject); padding: 1rem; }
+  #notice {
+    text-align: center; padding: .7rem 1rem; margin-bottom: .5rem;
+    color: var(--accept); border: 1px solid currentColor; border-radius: 10px;
+    font-size: .9rem;
+  }
   #undo {
     position: fixed; left: 50%; transform: translateX(-50%);
     bottom: calc(1.2rem + env(safe-area-inset-bottom));
@@ -176,6 +181,7 @@
 
 <main>
   <div id="error" hidden></div>
+  <div id="notice" hidden></div>
 
   <section id="view-triage">
     <div id="list"></div>
@@ -546,12 +552,25 @@ $('#signout').addEventListener('click', async () => {
   } catch (e) { showError(e.message); }
 });
 
-// The callback tab tells us when it is done.
-window.addEventListener('message', e => {
-  if (e.data === 'auth-changed') loadAuth();
-});
+function noticeSignInReturn() {
+  // The callback redirects here with ?signed_in=1. Acknowledge it, then strip
+  // the parameter so a reload or a bookmark does not repeat the message.
+  const params = new URLSearchParams(location.search);
+  if (!params.has('signed_in')) return;
+  history.replaceState({}, '', location.pathname);
+  showNotice('Signed in to Google');
+}
+
+function showNotice(msg) {
+  const el = $('#notice');
+  el.textContent = msg;
+  el.hidden = false;
+  clearTimeout(showNotice.t);
+  showNotice.t = setTimeout(() => { el.hidden = true; }, 3500);
+}
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+noticeSignInReturn();
 loadAuth();
 loadTriage();
 loadFiling();
