@@ -84,6 +84,54 @@ paper-grabber upload \
   --folder 1AbCdEfGhIjKlMnOpQrStUvWxYz
 ```
 
+## 4. Running it daily
+
+The unattended half of the pipeline — sync, enrich, fetch, upload — runs on a
+systemd **user** timer. Triage and filing are not in it: those are decisions,
+and they happen in the web app whenever you get to them.
+
+Put the credentials in an environment file (the unit deliberately does not
+carry them, because unit files are world-readable and `systemctl cat` would
+print the password):
+
+```bash
+mkdir -p ~/.config/paper-grabber
+install -m 600 /dev/null ~/.config/paper-grabber/env
+cat > ~/.config/paper-grabber/env <<'EOF'
+PAPER_GRABBER_IMAP_USER=snunezcr@gmail.com
+PAPER_GRABBER_IMAP_PASSWORD=xxxx xxxx xxxx xxxx
+OPENALEX_MAILTO=snunezcr@gmail.com
+EOF
+```
+
+Install and start the timer:
+
+```bash
+cp systemd/research-stream-sync.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now research-stream-sync.timer
+```
+
+Check it:
+
+```bash
+systemctl --user list-timers research-stream-sync.timer
+systemctl --user start research-stream-sync.service   # run it now
+journalctl --user -u research-stream-sync.service -n 50
+```
+
+`Persistent=true` matters on a laptop: if the machine is asleep at 06:00 the
+job runs on the next wake rather than silently skipping the day. Each step is
+allowed to fail without killing the run, so a morning where OpenAlex is out of
+budget still syncs mail.
+
+To keep the triage UI available, run it as its own long-lived service or just
+start it by hand when you want it:
+
+```bash
+paper-grabber serve
+```
+
 ## Why mail uses IMAP and not OAuth
 
 Reading mail via the Gmail API needs `gmail.readonly`, which Google classes as

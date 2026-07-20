@@ -1,0 +1,17 @@
+[Unit]
+Description=Research Stream daily alert sync
+Documentation=https://github.com/snunezcr/paper-grabber
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+
+# The whole point on a laptop: if the machine was asleep at 06:00, run the
+# job on the next wake instead of silently skipping the day.
+Persistent=true
+
+# Stagger so a dozen machines waking together do not hit OpenAlex at once,
+# and so the run does not fight the morning login for bandwidth.
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target

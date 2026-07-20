@@ -174,6 +174,7 @@ def cmd_download(args) -> int:
 
 
 DEFAULT_LEDGER = Path.home() / ".local" / "share" / "paper-grabber" / "state.db"
+DEFAULT_STAGING = Path.home() / ".local" / "share" / "paper-grabber" / "staging"
 
 
 def cmd_sync(args) -> int:
@@ -304,85 +305,139 @@ def cmd_decide(args) -> int:
     return 0
 
 
-def cmd_upload(args) -> int:
-    """Upload staged PDFs to Drive, deleting each only once it is verified."""
+def cmd_fetch(args) -> int:
+    """Download PDFs for accepted papers into staging.
+
+    Driven by the ledger rather than by .eml files, so it fetches exactly what
+    triage said was interesting. Papers with no open-access PDF are left alone
+    and reported, not retried endlessly.
+    """
     staging = StagingArea(args.staging)
-    pending = staging.pending()
-    if not pending:
-        print(f"nothing staged in {staging.root}")
-        return 0
+    for leftover in staging.sweep_partials():
+        print(f"swept incomplete download: {leftover.name}")
 
-    try:
-        creds = load_credentials(
-            credentials_path=args.credentials,
-            token_path=args.token,
-            scopes=DRIVE_SCOPES,
-            allow_interactive=not args.non_interactive,
-        )
-    except AuthError as exc:
-        print(f"authorisation failed: {exc}", file=sys.stderr)
-        return 2
-
-    drive = DriveClient(creds)
-
-    # Destinations chosen during filing win; --folder is the fallback for
-    # anything filed before destinations existed, or staged outside the UI.
     with Ledger(args.ledger) as ledger:
-        by_name = {}
-        for entry in ledger.accepted(filed=True):
-            v = paper_view(entry)
-            name = pdf_filename(v["title"], v["year"])
-            by_name[name] = (entry.dest_folder_id, entry.dest_folder_name)
-        fallback = ledger.get_setting(SETTING_BASE_FOLDER_ID)
+        todo = ledger.awaiting_download()
+        if args.limit:
+            todo = todo[: args.limit]
+        if not todo:
+            print("nothing to fetch")
+            return 0
 
-    fallback = args.folder or fallback
-    if not fallback and not by_name:
-        print(
-            "no destinations set. Choose them in the Filing tab, or pass --folder.",
-            file=sys.stderr,
-        )
-        return 2
+        taken = {p.name for p in staging.pending()}
+        got = skipped = failed = 0
 
-    if fallback:
+        with make_client() as http:
+            for entry in todo:
+                view = paper_view(entry)
+                candidates = _candidates_for(entry)
+                if not candidates:
+                    skipped += 1
+                    print(f"SKIP  no PDF location: {view['title'][:56]}")
+                    continue
+
+                result = download_first_available(candidates, client=http)
+                if not result.ok:
+                    failed += 1
+                    print(f"FAIL  {result.reason}: {view['title'][:56]}")
+                    continue
+
+                name = deduplicate_filename(
+                    pdf_filename(view["title"], view["year"]), taken
+                )
+                taken.add(name)
+                staging.stage(name, result.content)
+                ledger.set_staged(entry.key, name)
+                got += 1
+                print(f"STAGED {result.size / 1024:7.0f} KB  {name}")
+
+    print(f"\nstaged {got} | no PDF {skipped} | failed {failed}")
+    return 0
+
+
+def _candidates_for(entry) -> list[str]:
+    """PDF URLs for a ledger row: enrichment first, then Scholar's own link."""
+    enrichment = entry.payload.get("enrichment") or {}
+    candidates = list(enrichment.get("pdf_candidates") or [])
+    if not candidates:
+        url = enrichment.get("pdf_url")
+        if url:
+            candidates.append(url)
+    if not candidates:
+        paper = AlertPaper(**{k: v for k, v in entry.payload.items()
+                              if k in AlertPaper.__dataclass_fields__})
+        direct = direct_pdf_url(paper)
+        if direct:
+            candidates.append(direct)
+    return candidates
+
+
+def cmd_upload(args) -> int:
+    """Upload staged PDFs to their chosen destinations.
+
+    Each paper is deleted locally only once Drive confirms a matching size and
+    MD5, and is then marked uploaded so a re-run does not send it twice.
+    """
+    staging = StagingArea(args.staging)
+
+    with Ledger(args.ledger) as ledger:
+        todo = ledger.awaiting_upload()
+        unrouted = len([p for p in ledger.accepted(filed=False) if p.staged_name])
+        if not todo:
+            if unrouted:
+                print(f"nothing to upload; {unrouted} staged paper(s) have no "
+                      "destination yet -- choose one in the Filing tab")
+            else:
+                print("nothing to upload")
+            return 0
+
         try:
-            fallback = drive.resolve_folder(fallback)
-        except DriveError as exc:
-            print(f"could not resolve folder: {exc}", file=sys.stderr)
+            creds = load_credentials(
+                credentials_path=args.credentials,
+                token_path=args.token,
+                scopes=DRIVE_SCOPES,
+                allow_interactive=not args.non_interactive,
+            )
+        except AuthError as exc:
+            print(f"authorisation failed: {exc}", file=sys.stderr)
             return 2
 
-    uploaded = kept = unrouted = 0
-    for path in pending:
-        destination, dest_name = by_name.get(path.name, (None, None))
-        if destination is None:
-            destination, dest_name = fallback, "base folder"
-        if destination is None:
-            # Better to leave it staged than to guess a location.
-            unrouted += 1
-            print(f"SKIP  no destination chosen: {path.name}")
-            continue
+        drive = DriveClient(creds)
+        uploaded = kept = 0
 
-        try:
-            if not args.allow_duplicates and drive.exists_in_folder(path.name, destination):
-                print(f"SKIP  already in Drive: {path.name}")
+        for entry in todo:
+            path = staging.path_for(entry.staged_name)
+            if not path.exists():
+                # The file vanished; forget the staging claim so a later fetch
+                # can download it again rather than silently skipping forever.
+                ledger.set_staged(entry.key, None)
+                print(f"MISSING  re-queued for download: {entry.staged_name}")
                 continue
 
-            remote = drive.upload(path, folder_id=destination)
-            staging.confirm(path, remote)
-            uploaded += 1
-            print(f"UPLOADED  {path.name}  ->  {dest_name}")
-        except VerificationError as exc:
-            # The remote copy could not be proven identical, so the local file
-            # stays put. This is the safe outcome, not a lost paper.
-            kept += 1
-            print(f"UNVERIFIED (kept locally)  {exc}", file=sys.stderr)
-        except DriveError as exc:
-            kept += 1
-            print(f"FAILED (kept locally)  {exc}", file=sys.stderr)
+            try:
+                if not args.allow_duplicates and drive.exists_in_folder(
+                    path.name, entry.dest_folder_id
+                ):
+                    print(f"SKIP  already in Drive: {path.name}")
+                    ledger.set_staged(entry.key, None)
+                    path.unlink(missing_ok=True)
+                    continue
 
-    print(
-        f"\nuploaded {uploaded} | kept locally {kept} | "
-        f"no destination {unrouted} | still staged {len(staging.pending())}"
-    )
+                remote = drive.upload(path, folder_id=entry.dest_folder_id)
+                staging.confirm(path, remote)
+                ledger.set_uploaded(entry.key, remote.file_id)
+                uploaded += 1
+                print(f"UPLOADED  {path.name}  ->  {entry.dest_folder_name}")
+            except VerificationError as exc:
+                # Drive's copy could not be proven identical, so the local file
+                # stays. This is the safe outcome, not a lost paper.
+                kept += 1
+                print(f"UNVERIFIED (kept locally)  {exc}", file=sys.stderr)
+            except DriveError as exc:
+                kept += 1
+                print(f"FAILED (kept locally)  {exc}", file=sys.stderr)
+
+    print(f"\nuploaded {uploaded} | kept locally {kept} | still staged {len(staging.pending())}")
     return 0
 
 
@@ -413,10 +468,15 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--no-cache", action="store_true")
     d.set_defaults(func=cmd_download)
 
+    ft = sub.add_parser("fetch", help="download PDFs for accepted papers")
+    ft.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
+    ft.add_argument("--staging", type=Path, default=DEFAULT_STAGING)
+    ft.add_argument("--limit", type=int)
+    ft.set_defaults(func=cmd_fetch)
+
     u = sub.add_parser("upload", help="upload staged PDFs to Drive, then remove them")
-    u.add_argument("--staging", type=Path, required=True, help="staging directory")
+    u.add_argument("--staging", type=Path, default=DEFAULT_STAGING, help="staging directory")
     u.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
-    u.add_argument("--folder", help="fallback Drive folder ID or path for papers with no chosen destination")
     u.add_argument("--credentials", type=Path, default=DEFAULT_CREDENTIALS)
     u.add_argument("--token", type=Path, default=DEFAULT_TOKEN)
     u.add_argument("--non-interactive", action="store_true",

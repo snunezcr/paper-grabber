@@ -289,3 +289,80 @@ def test_filed_counts_only_accepted_papers(ledger):
     ledger.set_destination(key, "F1", "One")
     ledger.decide("A", Decision.REJECTED)
     assert ledger.counts()["filed"] == 0
+
+
+# --- fetch and upload progress ------------------------------------------------
+
+
+def accepted_key(ledger, title="Quantum Error Correction"):
+    ledger.record(paper(title=title))
+    key = ledger.pending()[0].key
+    ledger.decide(title, Decision.ACCEPTED)
+    return key
+
+
+def test_awaiting_download_lists_accepted_papers(ledger):
+    key = accepted_key(ledger)
+    assert [p.key for p in ledger.awaiting_download()] == [key]
+
+
+def test_pending_papers_are_not_awaiting_download(ledger):
+    ledger.record(paper())
+    assert ledger.awaiting_download() == []
+
+
+def test_staged_paper_leaves_the_download_queue(ledger):
+    key = accepted_key(ledger)
+    ledger.set_staged(key, "2026 - A.pdf")
+    assert ledger.awaiting_download() == []
+
+
+def test_uploaded_paper_is_never_re_downloaded(ledger):
+    key = accepted_key(ledger)
+    ledger.set_staged(key, "2026 - A.pdf")
+    ledger.set_uploaded(key, "DRIVE1")
+    assert ledger.awaiting_download() == []
+    assert ledger.awaiting_upload() == []
+
+
+def test_awaiting_upload_needs_both_a_file_and_a_destination(ledger):
+    key = accepted_key(ledger)
+    ledger.set_staged(key, "2026 - A.pdf")
+    assert ledger.awaiting_upload() == []  # no destination yet
+
+    ledger.set_destination(key, "F1", "Folder")
+    assert [p.key for p in ledger.awaiting_upload()] == [key]
+
+
+def test_destination_without_a_staged_file_is_not_uploadable(ledger):
+    key = accepted_key(ledger)
+    ledger.set_destination(key, "F1", "Folder")
+    assert ledger.awaiting_upload() == []
+
+
+def test_upload_clears_the_staging_claim(ledger):
+    key = accepted_key(ledger)
+    ledger.set_staged(key, "2026 - A.pdf")
+    ledger.set_destination(key, "F1", "Folder")
+    ledger.set_uploaded(key, "DRIVE1")
+    stored = ledger.get(key)
+    assert stored.staged_name is None
+    assert stored.drive_file_id == "DRIVE1"
+    assert stored.uploaded_at is not None
+
+
+def test_staging_claim_can_be_released(ledger):
+    # A vanished staged file must return to the download queue.
+    key = accepted_key(ledger)
+    ledger.set_staged(key, "2026 - A.pdf")
+    ledger.set_staged(key, None)
+    assert [p.key for p in ledger.awaiting_download()] == [key]
+
+
+def test_staged_name_survives_a_title_change(ledger):
+    # The whole reason the name is stored: enrichment can revise a title after
+    # the file is already on disk under the old one.
+    key = accepted_key(ledger)
+    ledger.set_staged(key, "2026 - Original Title.pdf")
+    ledger.attach_enrichment(key, {"title": "A Completely Revised Title"})
+    assert ledger.get(key).staged_name == "2026 - Original Title.pdf"
