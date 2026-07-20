@@ -1,12 +1,27 @@
-# Running Research Stream on a Hetzner CX22
+# Running Research Stream on a Hetzner Cloud server
 
-An always-on deployment for one person, reached over Tailscale. Roughly €4/month
-and about half an hour to set up.
+An always-on deployment for one person, reached over Tailscale. Roughly
+$6/month and about half an hour to set up.
+
+**US location.** Hetzner Cloud has two US datacenters — **Ashburn, Virginia**
+(`us-east`) and **Hillsboro, Oregon** (`us-west`) — so there is no need to
+change providers for a US-based service. Pick whichever is closer to you;
+Ashburn is the better choice for the Midwest and East Coast.
+
+**Instance type.** The Intel `CX` line (including the CX22) is Europe-only. The
+US datacenters run the AMD `CPX` line instead. The right match here is
+**CPX21** — 3 vCPU, 4 GB RAM — because a PDF download is buffered in memory up
+to a 200 MB cap, and 4 GB leaves comfortable headroom. CPX11 (2 vCPU, 2 GB)
+works for ordinary papers but is tight if a large download coincides with
+anything else. Prices shift, so confirm in the console; CPX21 is around
+$6–7/month plus Hetzner's small IPv4 fee.
+
+Everything below is identical whichever location and CPX size you choose.
 
 The shape of it:
 
 ```
-tablet / laptop ──(Tailscale, HTTPS)──▶ CX22 ──▶ 127.0.0.1:8823
+tablet / laptop ──(Tailscale, HTTPS)──▶ CPX21 (Ashburn) ──▶ 127.0.0.1:8823
 ```
 
 The app binds **loopback only** and is never exposed to the public internet.
@@ -16,8 +31,8 @@ browsing and filing to anyone who found the port.
 
 ## 1. Create the server
 
-In the Hetzner Cloud console: **CX22** (2 vCPU, 4 GB), Ubuntu 24.04, in a region
-near you. Add your SSH key. Note the public IP.
+In the Hetzner Cloud console: **CPX21** (3 vCPU, 4 GB), Ubuntu 24.04, location
+**Ashburn** or **Hillsboro**. Add your SSH key. Note the public IP.
 
 ```bash
 ssh root@<public-ip>
@@ -155,7 +170,7 @@ systemctl --user restart research-stream.service
 
 ## What this costs, and what it does not buy
 
-- **~€4.50/month** for the CX22, plus Hetzner's small IPv4 fee. Tailscale is
+- **~$6–7/month** for the CPX21, plus Hetzner's small IPv4 fee. Tailscale is
   free at this scale (up to 3 users, 100 devices).
 - It is still **single-user**. The tailnet is the security boundary; the app
   gains no accounts or authentication. Do not run `tailscale funnel` (which
