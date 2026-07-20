@@ -1,6 +1,7 @@
 """Browser sign-in tests. No network, no real Google client."""
 
 import json
+import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -230,3 +231,51 @@ def test_signout_endpoint(client):
 def test_triage_still_works_signed_out(client):
     c, _, _ = client
     assert c.get("/api/pending").status_code == 200
+
+
+# --- loopback http transport --------------------------------------------------
+
+
+def test_loopback_relaxes_the_transport_check(monkeypatch):
+    # oauthlib refuses non-HTTPS outright; Google permits it on loopback.
+    from paper_grabber.oauth_web import _allow_loopback_http
+
+    monkeypatch.delenv("OAUTHLIB_INSECURE_TRANSPORT", raising=False)
+    with _allow_loopback_http("http://localhost:8823/cb"):
+        assert os.environ["OAUTHLIB_INSECURE_TRANSPORT"] == "1"
+    assert "OAUTHLIB_INSECURE_TRANSPORT" not in os.environ
+
+
+def test_a_real_http_host_is_not_relaxed(monkeypatch):
+    from paper_grabber.oauth_web import _allow_loopback_http
+
+    monkeypatch.delenv("OAUTHLIB_INSECURE_TRANSPORT", raising=False)
+    with _allow_loopback_http("http://10.7.146.150:8823/cb"):
+        assert "OAUTHLIB_INSECURE_TRANSPORT" not in os.environ
+
+
+def test_https_is_not_relaxed(monkeypatch):
+    from paper_grabber.oauth_web import _allow_loopback_http
+
+    monkeypatch.delenv("OAUTHLIB_INSECURE_TRANSPORT", raising=False)
+    with _allow_loopback_http("https://host.ts.net/cb"):
+        assert "OAUTHLIB_INSECURE_TRANSPORT" not in os.environ
+
+
+def test_an_existing_value_is_restored(monkeypatch):
+    from paper_grabber.oauth_web import _allow_loopback_http
+
+    monkeypatch.setenv("OAUTHLIB_INSECURE_TRANSPORT", "preexisting")
+    with _allow_loopback_http("http://localhost:8823/cb"):
+        assert os.environ["OAUTHLIB_INSECURE_TRANSPORT"] == "1"
+    assert os.environ["OAUTHLIB_INSECURE_TRANSPORT"] == "preexisting"
+
+
+def test_the_flag_is_cleared_even_if_the_exchange_raises():
+    from paper_grabber.oauth_web import _allow_loopback_http
+
+    os.environ.pop("OAUTHLIB_INSECURE_TRANSPORT", None)
+    with pytest.raises(RuntimeError):
+        with _allow_loopback_http("http://localhost:8823/cb"):
+            raise RuntimeError("token exchange failed")
+    assert "OAUTHLIB_INSECURE_TRANSPORT" not in os.environ

@@ -13,6 +13,8 @@ per-user tokens and a real session layer, which is a different project.
 
 from __future__ import annotations
 
+import contextlib
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -145,7 +147,8 @@ class WebOAuth:
 
         flow = self._flow(pending.redirect_uri)
         try:
-            flow.fetch_token(authorization_response=full_url)
+            with _allow_loopback_http(pending.redirect_uri):
+                flow.fetch_token(authorization_response=full_url)
         except Exception as exc:  # oauthlib raises a wide variety here
             raise OAuthError(f"Google rejected the sign-in: {exc}") from exc
 
@@ -170,6 +173,38 @@ def callback_url(request_base: str) -> str:
     return request_base.rstrip("/") + CALLBACK_PATH
 
 
+def _is_loopback(url: str) -> bool:
+    return url.startswith(("http://localhost", "http://127.0.0.1"))
+
+
+@contextlib.contextmanager
+def _allow_loopback_http(redirect_uri: str):
+    """Let oauthlib complete a token exchange over http://localhost.
+
+    oauthlib refuses any non-HTTPS authorization response outright, but Google
+    deliberately permits plain http on loopback -- there is no network hop to
+    intercept. google-auth-oauthlib's own desktop helper sets this same flag
+    internally, which is why the CLI flow worked and this one did not.
+
+    Scoped to loopback and restored afterwards, so a genuine http:// host is
+    still rejected as it should be.
+    """
+    if not _is_loopback(redirect_uri):
+        yield
+        return
+
+    key = "OAUTHLIB_INSECURE_TRANSPORT"
+    previous = os.environ.get(key)
+    os.environ[key] = "1"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
+
+
 def is_valid_redirect(url: str) -> bool:
     """Whether Google will accept this as a redirect URI.
 
@@ -179,7 +214,7 @@ def is_valid_redirect(url: str) -> bool:
     """
     if url.startswith("https://"):
         return True
-    return url.startswith(("http://localhost", "http://127.0.0.1"))
+    return _is_loopback(url)
 
 
 def redirect_hint(url: str) -> str:
