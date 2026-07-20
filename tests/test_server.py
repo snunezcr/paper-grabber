@@ -844,10 +844,25 @@ def test_copy_falls_back_outside_a_secure_context(client):
     assert "execCommand('copy')" in body
 
 
-def test_blocked_copy_still_shows_the_entry(client):
+def test_citation_opens_in_the_side_panel(client):
+    # Same drawer as notes, in a citation mode.
     body = client.get("/").text
-    assert 'id="citebox"' in body
-    assert "showCitation" in body
+    assert 'id="np-cite"' in body
+    assert "openPanel('cite'" in body
+
+
+def test_citation_is_shown_as_well_as_copied(client):
+    # Where the clipboard is unavailable -- a plain-HTTP LAN address is not a
+    # secure context -- the entry must still be on screen to take by hand.
+    body = client.get("/").text
+    assert "Copying is blocked here" in body
+    assert 'id="citecopy"' in body
+
+
+def test_the_panel_serves_both_notes_and_citations(client):
+    body = client.get("/").text
+    assert "$('#np-note').hidden = mode !== 'note';" in body
+    assert "$('#np-cite').hidden = mode !== 'cite';" in body
 
 
 def test_cite_is_pinned_to_the_right_of_the_action_row(client):

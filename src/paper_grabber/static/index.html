@@ -372,7 +372,20 @@
     background: var(--bg); color: var(--ink);
     border: 1px solid var(--line); border-radius: 8px;
   }
+  .npbody { flex: 1; display: flex; flex-direction: column; gap: .6rem; min-height: 0; }
+  .npbody[hidden] { display: none; }
   .notehint { margin: 0; font-size: .82rem; color: var(--muted); }
+  #citetext {
+    flex: 1; min-height: 10rem; width: 100%; padding: .6rem; resize: none;
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--bg); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 8px;
+  }
+  #citecopy {
+    min-height: 48px; cursor: pointer; font-weight: 600; font-size: .95rem;
+    border-radius: 10px; border: 1px solid var(--accent);
+    background: none; color: var(--accent);
+  }
   #notesave {
     min-height: 48px; cursor: pointer; font-weight: 600; font-size: .95rem;
     border-radius: 10px; border: 1px solid var(--accent);
@@ -540,24 +553,26 @@
 
 <button id="undo" hidden>Undo</button>
 
-<aside id="notepanel" aria-label="Note" hidden>
+<aside id="notepanel" aria-label="Side panel" hidden>
   <div class="nphead">
-    <span class="nplabel">Note</span>
-    <button id="notecancel" aria-label="Close" data-tip="Close without saving"></button>
+    <span class="nplabel" id="nplabel">Note</span>
+    <button id="notecancel" aria-label="Close" data-tip="Close"></button>
   </div>
   <p id="notetitle"></p>
-  <textarea id="notetext" placeholder="Why this paper matters, what to read first…"></textarea>
-  <p class="notehint">Written to the file's description in Drive when it is uploaded.</p>
-  <button id="notesave">Save</button>
+
+  <div class="npbody" id="np-note">
+    <textarea id="notetext" placeholder="Why this paper matters, what to read first…"></textarea>
+    <p class="notehint">Written to the file's description in Drive when it is uploaded.</p>
+    <button id="notesave">Save</button>
+  </div>
+
+  <div class="npbody" id="np-cite" hidden>
+    <textarea id="citetext" readonly spellcheck="false"></textarea>
+    <p class="notehint" id="citehint">Copied to the clipboard.</p>
+    <button id="citecopy">Copy again</button>
+  </div>
 </aside>
 
-<div id="citebox" hidden>
-  <div class="citepanel">
-    <p>Copying was blocked. Select and copy this:</p>
-    <textarea id="citetext" readonly rows="9"></textarea>
-    <button id="citeclose">Close</button>
-  </div>
-</div>
 
 <div id="sheet" hidden>
   <header>
@@ -695,7 +710,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
 
 let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               pending: [], alerts: new Set(), knownAlerts: new Set(),
-              query: '', suggestions: {}, notePaper: null };
+              query: '', suggestions: {}, notePaper: null, panelMode: null };
 
 // Capabilities this page expects the server to have.
 const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes'];
@@ -1090,17 +1105,25 @@ function filingCard(p, {selectable}) {
 
 const notePanel = $('#notepanel');
 
-function editNote(paper) {
+function openPanel(mode, paper) {
   state.notePaper = paper;
+  state.panelMode = mode;
+  $('#nplabel').textContent = mode === 'cite' ? 'Citation' : 'Note';
   $('#notetitle').textContent = paper.title;
-  $('#notetext').value = paper.note || '';
+  $('#np-note').hidden = mode !== 'note';
+  $('#np-cite').hidden = mode !== 'cite';
   notePanel.hidden = false;
   // Next frame, so the transform animates in from the right rather than the
   // panel simply appearing.
   requestAnimationFrame(() => {
     notePanel.classList.add('open');
-    $('#notetext').focus();
+    if (mode === 'note') $('#notetext').focus();
   });
+}
+
+function editNote(paper) {
+  $('#notetext').value = paper.note || '';
+  openPanel('note', paper);
 }
 
 function closeNote() {
@@ -1165,16 +1188,15 @@ async function copyCitation(paper, card) {
   button.disabled = true;
   try {
     const r = await api(`/api/papers/${encodeURIComponent(paper.key)}/bibtex`);
+    $('#citetext').value = r.bibtex;
+    openPanel('cite', paper);
+    // Copy as well as show. Where the clipboard is unavailable -- a plain-HTTP
+    // LAN address is not a secure context -- the entry is at least on screen
+    // to select by hand.
     const copied = await copyToClipboard(r.bibtex);
-    if (copied) {
-      cardStatus(card, 'BibTeX copied');
-      setTimeout(() => cardStatus(card, ''), 2500);
-    } else {
-      // Copying can be blocked outright; showing the entry still lets the
-      // user take it.
-      showCitation(r.bibtex);
-      cardStatus(card, '');
-    }
+    $('#citehint').textContent = copied
+      ? 'Copied to the clipboard.'
+      : 'Copying is blocked here — select the text to copy it.';
   } catch (e) {
     cardStatus(card, `Could not build citation: ${e.message}`, {bad: true});
   } finally {
@@ -1182,14 +1204,12 @@ async function copyCitation(paper, card) {
   }
 }
 
-function showCitation(text) {
-  const box = $('#citebox');
-  $('#citetext').value = text;
-  box.hidden = false;
-  const ta = $('#citetext');
-  ta.focus();
-  ta.select();
-}
+$('#citecopy').addEventListener('click', async () => {
+  const ok = await copyToClipboard($('#citetext').value);
+  $('#citehint').textContent = ok
+    ? 'Copied to the clipboard.'
+    : 'Copying is blocked here — select the text to copy it.';
+});
 
 async function unfile(paper) {
   try {
@@ -1513,11 +1533,6 @@ async function browse(parent) {
     $('#folders').innerHTML = `<div class="note">${esc(e.message)}</div>`;
   }
 }
-
-$('#citeclose').addEventListener('click', () => { $('#citebox').hidden = true; });
-$('#citebox').addEventListener('click', e => {
-  if (e.target === $('#citebox')) $('#citebox').hidden = true;
-});
 
 $('#sheetcancel').addEventListener('click', () => { $('#sheet').hidden = true; state.sheet = null; });
 
