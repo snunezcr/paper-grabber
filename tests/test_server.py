@@ -798,3 +798,42 @@ def test_collapse_choice_is_remembered(client):
 def test_collapse_state_is_not_restored_into_the_drawer(client):
     # A drawer that opened itself on load would cover the papers.
     assert "body.sidebar-collapsed #sidebar { display: block; }" in client.get("/").text
+
+
+# --- citations ----------------------------------------------------------------
+
+
+def test_bibtex_endpoint_returns_an_entry(client, seeded):
+    key = normalize_title("Quantum Error Correction on FPGAs")
+    r = client.get(f"/api/papers/{key}/bibtex")
+    assert r.status_code == 200
+    entry = r.json()["bibtex"]
+    assert entry.startswith("@")
+    assert "Quantum Error Correction on FPGAs" in entry
+
+
+def test_bibtex_for_an_unknown_paper_is_404(client):
+    assert client.get("/api/papers/nope/bibtex").status_code == 404
+
+
+def test_cite_button_is_on_filing_and_processed_cards_only(client):
+    body = client.get("/").text
+    # Present in the filing and processed renderers...
+    assert body.count('class="cite"') >= 2
+    # ...but the triage card offers only the two decisions.
+    triage = body.split("function triageCard")[1].split("function ")[0]
+    assert "cite" not in triage
+
+
+def test_copy_falls_back_outside_a_secure_context(client):
+    # The tablet reaches this app over plain HTTP, where navigator.clipboard
+    # does not exist.
+    body = client.get("/").text
+    assert "isSecureContext" in body
+    assert "execCommand('copy')" in body
+
+
+def test_blocked_copy_still_shows_the_entry(client):
+    body = client.get("/").text
+    assert 'id="citebox"' in body
+    assert "showCitation" in body

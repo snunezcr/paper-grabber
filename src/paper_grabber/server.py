@@ -205,6 +205,17 @@ def create_app(
                 },
             }
 
+    @app.get("/api/papers/{key}/bibtex")
+    def bibtex(key: str) -> dict[str, Any]:
+        """A BibTeX entry for one paper."""
+        from .bibtex import to_bibtex
+
+        with open_ledger() as led:
+            paper = led.get(key)
+            if paper is None:
+                raise HTTPException(status_code=404, detail="no such paper")
+            return {"key": key, "bibtex": to_bibtex(paper_view(paper))}
+
     @app.get("/api/processed")
     def processed() -> dict[str, Any]:
         """Papers already in Drive."""
@@ -407,6 +418,7 @@ def create_app(
                     "processed",
                     "verify",
                     "scope-check",
+                    "bibtex",
                 }
             ),
         }

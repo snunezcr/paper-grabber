@@ -285,6 +285,27 @@
   #sheetfoot .newf { flex: 0 0 auto; padding: 0 1rem; border: 1px solid var(--line); background: none; color: var(--accent); }
   #sheetfoot .confirm { flex: 1; border: 1px solid var(--accent); background: var(--accent); color: #fff; }
 
+  #citebox {
+    position: fixed; inset: 0; z-index: 25; display: grid; place-items: center;
+    background: rgba(0,0,0,.45); padding: 1.2rem;
+  }
+  .citepanel {
+    background: var(--sheet); border: 1px solid var(--line); border-radius: 12px;
+    padding: 1rem; width: min(40rem, 100%);
+  }
+  .citepanel p { margin: 0 0 .6rem; font-size: .9rem; color: var(--muted); }
+  #citetext {
+    width: 100%; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--bg); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 8px; padding: .6rem; resize: vertical;
+  }
+  #citeclose {
+    margin-top: .7rem; min-height: 44px; padding: 0 1.1rem; cursor: pointer;
+    border: 1px solid var(--accent); border-radius: 10px;
+    background: var(--accent); color: #fff; font-weight: 600;
+  }
+  .filed-actions .cite { flex: 0 0 auto; padding: 0 .9rem; }
+
   #empty, #error, .note { text-align: center; color: var(--muted); padding: 2.5rem 1rem; }
   #error { color: var(--reject); padding: 1rem; }
   #notice {
@@ -381,6 +402,14 @@
 
 <button id="undo" hidden>Undo</button>
 
+<div id="citebox" hidden>
+  <div class="citepanel">
+    <p>Copying was blocked. Select and copy this:</p>
+    <textarea id="citetext" readonly rows="9"></textarea>
+    <button id="citeclose">Close</button>
+  </div>
+</div>
+
 <div id="sheet" hidden>
   <header>
     <div class="titlebar"><h1 id="sheettitle">Choose a folder</h1></div>
@@ -403,7 +432,7 @@ let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               pending: [], alerts: new Set(), knownAlerts: new Set() };
 
 // Capabilities this page expects the server to have.
-const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check'];
+const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex'];
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -682,18 +711,77 @@ function filingCard(p, {selectable}) {
     const actions = document.createElement('div');
     actions.className = 'actions filed-actions';
     if (p.uploaded) {
-      actions.innerHTML = '<span class="done">In Drive</span>';
+      actions.innerHTML = `
+        <button class="cite">Cite</button>
+        <span class="done">In Drive</span>
+        <span class="cardstatus" hidden></span>`;
+      actions.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
     } else {
       actions.innerHTML = `
         <button class="up">Upload</button>
         <button class="unfile">Not yet</button>
+        <button class="cite">Cite</button>
         <span class="cardstatus" hidden></span>`;
       actions.querySelector('.up').addEventListener('click', () => uploadOne(p, el));
       actions.querySelector('.unfile').addEventListener('click', () => unfile(p));
+      actions.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
     }
     el.querySelector('.pick > div:last-child').appendChild(actions);
   }
   return el;
+}
+
+async function copyToClipboard(text) {
+  // navigator.clipboard requires a secure context. A plain-HTTP LAN address
+  // is not one -- exactly how the tablet reaches this app -- so fall back to
+  // the old execCommand path, and report failure so the caller can offer the
+  // text instead.
+  if (navigator.clipboard && window.isSecureContext) {
+    try { await navigator.clipboard.writeText(text); return true; } catch (e) {}
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);   // iOS/Android need the range
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch (e) { return false; }
+}
+
+async function copyCitation(paper, card) {
+  const button = card.querySelector('.cite');
+  button.disabled = true;
+  try {
+    const r = await api(`/api/papers/${encodeURIComponent(paper.key)}/bibtex`);
+    const copied = await copyToClipboard(r.bibtex);
+    if (copied) {
+      cardStatus(card, 'BibTeX copied');
+      setTimeout(() => cardStatus(card, ''), 2500);
+    } else {
+      // Copying can be blocked outright; showing the entry still lets the
+      // user take it.
+      showCitation(r.bibtex);
+      cardStatus(card, '');
+    }
+  } catch (e) {
+    cardStatus(card, `Could not build citation: ${e.message}`, {bad: true});
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function showCitation(text) {
+  const box = $('#citebox');
+  $('#citetext').value = text;
+  box.hidden = false;
+  const ta = $('#citetext');
+  ta.focus();
+  ta.select();
 }
 
 async function unfile(paper) {
@@ -794,11 +882,13 @@ function processedCard(p) {
         ? `<a class="open" href="${esc(p.drive_url)}" target="_blank" rel="noopener">Open in Drive</a>`
         : ''}
       <button class="verify">Check</button>
+      <button class="cite">Cite</button>
       <span class="done">${p.dest_folder_name ? '→ ' + esc(p.dest_folder_name) : 'In Drive'}</span>
       <span class="cardstatus" hidden></span>
     </div>`;
   wireAbstract(el);
   el.querySelector('.verify').addEventListener('click', () => verifyOne(p, el));
+  el.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
   return el;
 }
 
@@ -921,6 +1011,11 @@ async function browse(parent) {
     $('#folders').innerHTML = `<div class="note">${esc(e.message)}</div>`;
   }
 }
+
+$('#citeclose').addEventListener('click', () => { $('#citebox').hidden = true; });
+$('#citebox').addEventListener('click', e => {
+  if (e.target === $('#citebox')) $('#citebox').hidden = true;
+});
 
 $('#sheetcancel').addEventListener('click', () => { $('#sheet').hidden = true; state.sheet = null; });
 
