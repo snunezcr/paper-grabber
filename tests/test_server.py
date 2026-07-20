@@ -617,15 +617,29 @@ def test_pending_payload_carries_the_alert_query(client):
     assert all("alert_query" in p for p in papers)
 
 
-def test_page_has_the_alert_filter(client):
+def test_page_has_the_filter_sidebar(client):
     body = client.get("/").text
-    assert 'id="alertfilter"' in body
+    assert 'id="sidebar"' in body
+    assert 'id="alertoptions"' in body
     assert "renderAlertFilter" in body
 
 
-def test_filter_is_hidden_for_a_single_alert(client):
-    # One chip is not a choice.
+def test_sidebar_has_a_toggle_for_narrow_screens(client):
+    # The Tab S10 in portrait has no width for a permanent second column.
+    body = client.get("/").text
+    assert 'id="filtertoggle"' in body
+    assert 'aria-controls="sidebar"' in body
+
+
+def test_alert_group_is_hidden_for_a_single_alert(client):
+    # One checkbox is not a choice.
     assert "counts.size < 2" in client.get("/").text
+
+
+def test_alert_selection_is_multi_select(client):
+    body = client.get("/").text
+    assert 'type = \'checkbox\'' in body or "box.type = 'checkbox'" in body
+    assert "state.alerts" in body
 
 
 def test_papers_from_several_alerts_are_distinguishable(seeded):

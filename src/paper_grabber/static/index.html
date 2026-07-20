@@ -75,23 +75,71 @@
     font-size: .78rem; font-variant-numeric: tabular-nums;
   }
 
-  main { max-width: 46rem; margin: 0 auto; padding: 1rem 1rem 7rem; }
+  main { flex: 1; min-width: 0; max-width: 46rem; margin: 0 auto; padding: 1rem 1rem 7rem; }
 
-  #alertfilter {
-    display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1rem;
+  /* Sidebar. Beside the content when there is room, a slide-over drawer
+     when there is not -- the Tab S10 in portrait has neither the width to
+     spare nor the patience for a cramped two-column layout. */
+  #shell { display: flex; gap: 0; align-items: flex-start; }
+  #sidebar {
+    flex: 0 0 15rem; position: sticky; top: 6.5rem;
+    padding: 1rem .75rem 1rem 1rem; align-self: flex-start;
+    max-height: calc(100vh - 7rem); overflow-y: auto;
   }
-  #alertfilter button {
-    min-height: 40px; padding: 0 .75rem; cursor: pointer;
-    border: 1px solid var(--line); border-radius: 999px;
-    background: var(--card); color: var(--muted);
-    font-size: .85rem; font-weight: 600; white-space: nowrap;
+  #filtertoggle { display: none; }
+
+  .fgroup { border-bottom: 1px solid var(--line); padding-bottom: .5rem; }
+  .fgroup > summary {
+    cursor: pointer; list-style: none; min-height: 44px;
+    display: flex; align-items: center; gap: .5rem;
+    font-size: .78rem; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--muted);
   }
-  #alertfilter button[aria-pressed="true"] {
-    border-color: var(--accent); color: var(--accent);
+  .fgroup > summary::-webkit-details-marker { display: none; }
+  .fgroup > summary::after {
+    content: '▸'; margin-left: auto; transition: transform .15s;
   }
-  #alertfilter button .n {
-    margin-left: .4rem; font-variant-numeric: tabular-nums; opacity: .8;
+  .fgroup[open] > summary::after { transform: rotate(90deg); }
+  .fgroup > summary .sel {
+    text-transform: none; letter-spacing: 0; font-weight: 600;
+    color: var(--ink); font-size: .82rem;
   }
+  .optbar { display: flex; gap: .4rem; margin: .2rem 0 .4rem; }
+  .optbar button {
+    flex: 1; min-height: 34px; font-size: .78rem; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: none; color: var(--accent);
+  }
+  .opt {
+    display: flex; align-items: center; gap: .55rem; width: 100%;
+    min-height: 44px; padding: .2rem .1rem; cursor: pointer;
+    font-size: .87rem; color: var(--ink); text-align: left;
+  }
+  .opt input { width: 20px; height: 20px; flex: 0 0 auto; }
+  .opt .label { flex: 1; overflow-wrap: anywhere; }
+  .opt .n {
+    color: var(--muted); font-variant-numeric: tabular-nums; font-size: .8rem;
+  }
+
+  @media (max-width: 800px) {
+    #filtertoggle {
+      display: inline-flex; align-items: center; margin-top: .45rem;
+      min-height: 40px; padding: 0 .9rem; cursor: pointer;
+      border: 1px solid var(--line); border-radius: 8px;
+      background: var(--card); color: var(--ink); font-size: .85rem;
+      font-weight: 600;
+    }
+    #sidebar {
+      position: fixed; inset: 0 auto 0 0; z-index: 12; width: 17rem;
+      max-height: none; background: var(--card);
+      border-right: 1px solid var(--line);
+      transform: translateX(-100%); transition: transform .18s;
+      padding-top: calc(1rem + env(safe-area-inset-top));
+    }
+    #sidebar.open { transform: none; box-shadow: 0 0 30px rgba(0,0,0,.3); }
+    #shell { display: block; }
+  }
+  @media (prefers-reduced-motion: reduce) { #sidebar { transition: none; } }
 
   .card {
     background: var(--card); border: 1px solid var(--line); border-radius: 12px;
@@ -226,12 +274,27 @@
   </nav>
 </header>
 
+<button id="filtertoggle" aria-expanded="false" aria-controls="sidebar">Filters</button>
+
+<div id="shell">
+<aside id="sidebar" aria-label="Filters">
+  <details class="fgroup" id="fg-alerts" open>
+    <summary>Alerts <span class="sel" id="alertsel">All</span></summary>
+    <div class="options">
+      <div class="optbar">
+        <button type="button" data-all>All</button>
+        <button type="button" data-none>None</button>
+      </div>
+      <div id="alertoptions"></div>
+    </div>
+  </details>
+</aside>
+
 <main>
   <div id="error" hidden></div>
   <div id="notice" hidden></div>
 
   <section id="view-triage">
-    <div id="alertfilter" hidden></div>
     <div id="list"></div>
     <div id="empty" hidden>Nothing to triage here. Press Check now, or pick another alert above.</div>
   </section>
@@ -254,6 +317,7 @@
     </div>
   </section>
 </main>
+</div>
 
 <div id="filebar" hidden>
   <span class="count" id="selcount">0 selected</span>
@@ -282,7 +346,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
-              pending: [], filter: null };
+              pending: [], alerts: new Set() };
 
 // Capabilities this page expects the server to have.
 const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check'];
@@ -431,46 +495,59 @@ function alertOf(p) {
   return p.alert_query || NO_ALERT;
 }
 
-function renderAlertFilter() {
-  const wrap = $('#alertfilter');
-  const papers = state.pending || [];
+function alertCounts() {
   const counts = new Map();
-  for (const p of papers) counts.set(alertOf(p), (counts.get(alertOf(p)) || 0) + 1);
-
-  // One alert is not a choice; showing a single chip is just clutter.
-  if (counts.size < 2) {
-    wrap.hidden = true;
-    state.filter = null;
-    return;
+  for (const p of state.pending || []) {
+    counts.set(alertOf(p), (counts.get(alertOf(p)) || 0) + 1);
   }
+  return counts;
+}
 
-  // A filter whose papers are all gone would leave an empty list and no way
-  // back except finding the All chip.
-  if (state.filter && !counts.has(state.filter)) state.filter = null;
+function renderAlertFilter() {
+  const counts = alertCounts();
+  const group = $('#fg-alerts');
+  // One alert is not a choice.
+  group.hidden = counts.size < 2;
+  if (group.hidden) { state.alerts.clear(); return; }
 
-  const chips = [['', 'All', papers.length]];
+  // Drop selections whose papers have all been triaged, or the list would be
+  // empty with no obvious way back.
+  for (const name of [...state.alerts]) if (!counts.has(name)) state.alerts.delete(name);
+
   // Busiest first: the noisy query is the one worth isolating.
-  for (const [name, n] of [...counts].sort((a, b) => b[1] - a[1])) {
-    chips.push([name, name, n]);
-  }
+  const entries = [...counts].sort((a, b) => b[1] - a[1]);
 
-  wrap.replaceChildren(...chips.map(([value, label, n]) => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.setAttribute('aria-pressed', String((state.filter || '') === value));
-    b.innerHTML = `${esc(label)}<span class="n">${n}</span>`;
-    b.addEventListener('click', () => {
-      state.filter = value || null;
+  $('#alertoptions').replaceChildren(...entries.map(([name, n]) => {
+    const row = document.createElement('label');
+    row.className = 'opt';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = state.alerts.has(name);
+    box.addEventListener('change', () => {
+      box.checked ? state.alerts.add(name) : state.alerts.delete(name);
       renderTriage();
     });
-    return b;
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = name;
+    const num = document.createElement('span');
+    num.className = 'n';
+    num.textContent = n;
+    row.append(box, label, num);
+    return row;
   }));
-  wrap.hidden = false;
+
+  // An empty selection means everything, which is less fiddly than forcing
+  // the user to tick every box to see the whole queue.
+  const chosen = state.alerts.size;
+  $('#alertsel').textContent =
+    chosen === 0 ? 'All' : chosen === 1 ? [...state.alerts][0] : `${chosen} selected`;
 }
 
 function visiblePending() {
   const papers = state.pending || [];
-  return state.filter ? papers.filter(p => alertOf(p) === state.filter) : papers;
+  if (!state.alerts.size) return papers;
+  return papers.filter(p => state.alerts.has(alertOf(p)));
 }
 
 function renderTriage() {
@@ -801,6 +878,7 @@ function selectTab(tab) {
     $(`#view-${name}`).hidden = tab !== name;
   }
   $('#undo').hidden = tab !== 'triage' || !state.lastUndo;
+  syncSidebarVisibility();
   refreshFileBar();
   if (tab === 'filing') loadFiling();
   if (tab === 'processed') loadProcessed();
@@ -937,8 +1015,52 @@ function showNotice(msg) {
   showNotice.t = setTimeout(() => { el.hidden = true; }, 3500);
 }
 
+// ---------- sidebar ----------
+
+$('#fg-alerts').querySelector('[data-all]').addEventListener('click', () => {
+  state.alerts.clear();          // empty means all
+  renderTriage();
+});
+
+$('#fg-alerts').querySelector('[data-none]').addEventListener('click', () => {
+  // Ticking nothing would show everything, so "None" selects the busiest
+  // alert alone rather than producing an empty screen.
+  const entries = [...alertCounts()].sort((a, b) => b[1] - a[1]);
+  state.alerts = new Set(entries.length ? [entries[0][0]] : []);
+  renderTriage();
+});
+
+const sidebar = $('#sidebar');
+const filterToggle = $('#filtertoggle');
+
+function setSidebar(open) {
+  sidebar.classList.toggle('open', open);
+  filterToggle.setAttribute('aria-expanded', String(open));
+}
+
+filterToggle.addEventListener('click', () => {
+  setSidebar(!sidebar.classList.contains('open'));
+});
+
+// Tapping a card should not leave the drawer covering the content.
+document.addEventListener('click', e => {
+  if (window.innerWidth > 800) return;
+  if (!sidebar.classList.contains('open')) return;
+  if (sidebar.contains(e.target) || filterToggle.contains(e.target)) return;
+  setSidebar(false);
+});
+
+// Filters apply to the triage queue only, for now.
+function syncSidebarVisibility() {
+  const relevant = state.tab === 'triage';
+  sidebar.style.display = relevant ? '' : 'none';
+  filterToggle.style.visibility = relevant ? '' : 'hidden';
+  if (!relevant) setSidebar(false);
+}
+
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 noticeSignInReturn();
+syncSidebarVisibility();
 checkServerVersion();
 resumeRefreshIfRunning();
 loadAuth();
