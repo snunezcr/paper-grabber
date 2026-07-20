@@ -27,6 +27,50 @@ _ESCAPE = {
 }
 
 _WS_RE = re.compile(r"\s+")
+
+# Characters with a name in LaTeX. Applied before accent decomposition, so the
+# letters that have their own command -- aa, o, ss -- take it rather than being
+# rebuilt from a base and a mark.
+_SYMBOLS = {
+    # Punctuation that Scholar and publishers emit as Unicode. The plain
+    # hyphen is the most common non-ASCII character in a real queue.
+    "\u2010": "-", "\u2011": "-", "\u2212": "-",
+    "\u2012": "--", "\u2013": "--", "\u2014": "---",
+    "\u2018": "`", "\u2019": "'", "\u201c": "``", "\u201d": "''",
+    "\u2032": "'", "\u2033": "''",
+    "\u2026": r"\ldots{}", "\u00a0": " ", "\u200b": "",
+    # Symbols.
+    "\u00d7": r"$\times$", "\u00b1": r"$\pm$", "\u00b7": r"$\cdot$",
+    "\u00b0": r"\textdegree{}", "\u2265": r"$\geq$", "\u2264": r"$\leq$",
+    "\u2260": r"$\neq$", "\u2248": r"$\approx$", "\u221e": r"$\infty$",
+    "\u2192": r"$\rightarrow$", "\u2190": r"$\leftarrow$",
+    "\u00ae": r"\textregistered{}", "\u00a9": r"\copyright{}",
+    "\u2122": r"\texttrademark{}",
+    # Letters with their own command rather than an accent.
+    "\u00e5": r"\aa{}", "\u00c5": r"\AA{}",
+    "\u00e6": r"\ae{}", "\u00c6": r"\AE{}",
+    "\u0153": r"\oe{}", "\u0152": r"\OE{}",
+    "\u00f8": r"\o{}", "\u00d8": r"\O{}",
+    "\u00df": r"\ss{}", "\u0142": r"\l{}", "\u0141": r"\L{}",
+    "\u0111": r"\dj{}", "\u0110": r"\DJ{}",
+    "\u00f0": r"\dh{}", "\u00de": r"\TH{}", "\u00fe": r"\th{}",
+    "\u0131": r"\i{}",
+    # Greek, which arXiv titles use freely.
+    "\u03b1": r"$\alpha$", "\u03b2": r"$\beta$", "\u03b3": r"$\gamma$",
+    "\u03b4": r"$\delta$", "\u03b5": r"$\epsilon$", "\u03b8": r"$\theta$",
+    "\u03bb": r"$\lambda$", "\u03bc": r"$\mu$", "\u00b5": r"$\mu$",
+    "\u03c0": r"$\pi$", "\u03c1": r"$\rho$", "\u03c3": r"$\sigma$",
+    "\u03c4": r"$\tau$", "\u03c6": r"$\phi$", "\u03c8": r"$\psi$",
+    "\u03c9": r"$\omega$", "\u0394": r"$\Delta$", "\u03a9": r"$\Omega$",
+}
+
+# Combining marks, as LaTeX accent commands.
+_COMBINING = {
+    "\u0301": "'", "\u0300": "`", "\u0302": "^", "\u0308": '"',
+    "\u0303": "~", "\u0304": "=", "\u0307": ".", "\u0327": "c",
+    "\u030c": "v", "\u0306": "u", "\u030b": "H", "\u030a": "r",
+    "\u0328": "k", "\u0323": "d", "\u0331": "b",
+}
 _NONWORD_RE = re.compile(r"[^a-z0-9]+")
 
 # Words too generic to identify a paper in a citation key.
@@ -42,6 +86,39 @@ _CONFERENCE_HINTS = ("conference", "proceedings", "symposium", "workshop", "cong
 def escape(text: str) -> str:
     """Escape BibTeX's special characters."""
     return "".join(_ESCAPE.get(ch, ch) for ch in text)
+
+
+def to_latex(text: str) -> str:
+    """Render text as portable LaTeX.
+
+    Escapes BibTeX's own metacharacters, then rewrites Unicode punctuation and
+    accented letters as LaTeX commands: "Schrödinger" becomes
+    ``Schr\\"{o}dinger``. UTF-8 works in a modern biber pipeline but not in a
+    classic BibTeX one, and an entry that only compiles on the author's own
+    machine is not much use.
+
+    Order matters. Escaping runs first, so a literal backslash in the source is
+    neutralised before this function starts adding its own; the commands it
+    then emits are left alone.
+
+    Characters with no mapping are passed through rather than dropped -- a
+    missing glyph is a compile error the user can see and fix, where a silently
+    deleted one corrupts a name.
+    """
+    out = escape(text)
+    out = "".join(_SYMBOLS.get(ch, ch) for ch in out)
+
+    # Decompose so an accented letter becomes a base plus a mark, then rebuild
+    # each pair as an accent command.
+    result: list[str] = []
+    for ch in unicodedata.normalize("NFD", out):
+        cmd = _COMBINING.get(ch)
+        if cmd and result:
+            base = result.pop()
+            result.append(f"\\{cmd}{{{base}}}")
+        else:
+            result.append(ch)
+    return "".join(result)
 
 
 def _ascii_fold(text: str) -> str:
@@ -102,11 +179,15 @@ def to_bibtex(view: dict) -> str:
 
     fields: list[tuple[str, str]] = []
     if authors:
-        fields.append(("author", " and ".join(format_author(a) for a in authors)))
+        fields.append(
+            ("author", " and ".join(to_latex(format_author(a)) for a in authors))
+        )
     # Braced so BibTeX preserves the capitalisation of proper nouns.
-    fields.append(("title", "{" + escape(title) + "}"))
+    fields.append(("title", "{" + to_latex(title) + "}"))
     if venue:
-        fields.append(("booktitle" if kind == "inproceedings" else "journal", escape(venue)))
+        fields.append(
+            ("booktitle" if kind == "inproceedings" else "journal", to_latex(venue))
+        )
     if year:
         fields.append(("year", str(year)))
     if view.get("doi"):
