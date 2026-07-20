@@ -10,6 +10,7 @@ leading bytes instead.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from typing import Iterator
@@ -31,9 +32,21 @@ _MAGIC_WINDOW = 1024
 
 _HTML_MARKERS = (b"<!doctype html", b"<html", b"<head", b"<body")
 
-# 200 MB: comfortably above any real paper, low enough that a misdirected
-# download cannot fill the disk.
-DEFAULT_MAX_BYTES = 200 * 1024 * 1024
+# The largest paper seen in practice is ~30 MB; 100 MB covers theses and
+# image-heavy PDFs with room to spare. The cap exists so a misdirected download
+# cannot exhaust memory -- the whole body is buffered, and briefly doubled when
+# assembled -- which matters on a 1 GB box. Override with PG_MAX_PDF_MB for a
+# larger machine.
+def _default_max_bytes() -> int:
+    raw = os.environ.get("PG_MAX_PDF_MB", "100")
+    try:
+        mb = int(raw)
+    except ValueError:
+        mb = 100
+    return max(1, mb) * 1024 * 1024
+
+
+DEFAULT_MAX_BYTES = _default_max_bytes()
 
 # Enough of the body to identify the content without buffering a whole file.
 _SNIFF_BYTES = 4096

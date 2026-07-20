@@ -31,9 +31,10 @@ PDF download is buffered in memory up to a 200 MB cap, and 2 GB carries that
 with room for the OS. It runs about $13/month plus a little for disk.
 
 **Free tier.** One **e2-micro** in `us-west1`, `us-central1`, or `us-east1` is
-free every month. It has only 1 GB of RAM, which is tight against the 200 MB
-download buffer — fine for ordinary papers, at risk of running out on a very
-large PDF. Pick it to pay nothing, the e2-small to not think about it.
+free every month. It has only 1 GB of RAM. The PDF download cap defaults to
+100 MB (`PG_MAX_PDF_MB`), which keeps peak memory well under that ceiling and
+still covers every real paper — the largest seen in practice is ~30 MB. Pick
+the e2-micro to pay nothing, the e2-small only if you want the headroom.
 
 ## 1. Create the server
 
