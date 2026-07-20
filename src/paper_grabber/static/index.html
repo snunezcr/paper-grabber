@@ -34,7 +34,21 @@
     border-bottom: 1px solid var(--line);
     padding: calc(.6rem + env(safe-area-inset-top)) 1rem .3rem;
   }
-  .titlebar { display: flex; align-items: baseline; gap: .75rem; }
+  .titlebar { display: flex; align-items: center; gap: .75rem; }
+  #check {
+    margin-left: auto; min-height: 40px; padding: 0 .9rem; cursor: pointer;
+    display: inline-flex; align-items: center; gap: .45rem; white-space: nowrap;
+    border: 1px solid var(--accent); border-radius: 8px;
+    background: none; color: var(--accent); font-size: .88rem; font-weight: 600;
+  }
+  #check[disabled] { opacity: .55; cursor: default; }
+  #check .spin {
+    width: 13px; height: 13px; border-radius: 50%; display: inline-block;
+    border: 2px solid currentColor; border-top-color: transparent;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { #check .spin { animation: none; } }
   .titlebar h1 { font-size: 1.05rem; margin: 0; font-weight: 600; }
   #counts { color: var(--muted); font-size: .85rem; font-variant-numeric: tabular-nums; }
   #authbar {
@@ -167,6 +181,9 @@
   <div class="titlebar">
     <h1>Research Stream</h1>
     <span id="counts"></span>
+    <button id="check" title="Check Gmail for new alerts now">
+      <span class="spin" hidden></span><span class="label">Check now</span>
+    </button>
   </div>
   <div id="authbar" hidden>
     <span id="authmsg"></span>
@@ -561,6 +578,71 @@ function noticeSignInReturn() {
   showNotice('Signed in to Google');
 }
 
+// ---------- manual mail check ----------
+
+const checkBtn = $('#check');
+let pollTimer = null;
+
+function setChecking(on) {
+  checkBtn.disabled = on;
+  checkBtn.querySelector('.spin').hidden = !on;
+  checkBtn.querySelector('.label').textContent = on ? 'Checking…' : 'Check now';
+}
+
+function describe(r) {
+  if (!r) return 'Checked.';
+  if (r.error) return `Check failed: ${r.error}`;
+  if (!r.messages) return 'No new alert emails.';
+  const bits = [`${r.messages} alert email${r.messages === 1 ? '' : 's'}`];
+  bits.push(r.new_papers ? `${r.new_papers} new paper${r.new_papers === 1 ? '' : 's'}`
+                         : 'nothing new');
+  if (r.already_known) bits.push(`${r.already_known} already seen`);
+  return bits.join(' · ');
+}
+
+async function pollRefresh() {
+  try {
+    const s = await api('/api/refresh');
+    if (s.running) {
+      pollTimer = setTimeout(pollRefresh, 1200);
+      return;
+    }
+    setChecking(false);
+    const r = s.last;
+    if (r && r.error) showError(describe(r));
+    else showNotice(describe(r));
+    // A warning means mail arrived but enrichment did not finish; the papers
+    // are real and worth showing even without abstracts.
+    if (r && r.warning) showError(r.warning);
+    if (r && r.new_papers) { loadTriage(); loadFiling(); }
+    else loadTriage();
+  } catch (e) {
+    setChecking(false);
+    showError(`Could not read check status: ${e.message}`);
+  }
+}
+
+checkBtn.addEventListener('click', async () => {
+  setChecking(true);
+  clearTimeout(pollTimer);
+  try {
+    await api('/api/refresh', {method: 'POST'});
+    pollRefresh();
+  } catch (e) {
+    setChecking(false);
+    showError(`Could not start a check: ${e.message}`);
+  }
+});
+
+// A check may already be running -- started from another device, or left
+// running when this page was reloaded.
+async function resumeRefreshIfRunning() {
+  try {
+    const s = await api('/api/refresh');
+    if (s.running) { setChecking(true); pollRefresh(); }
+  } catch (e) { /* the button still works */ }
+}
+
 function showNotice(msg) {
   const el = $('#notice');
   el.textContent = msg;
@@ -571,6 +653,7 @@ function showNotice(msg) {
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 noticeSignInReturn();
+resumeRefreshIfRunning();
 loadAuth();
 loadTriage();
 loadFiling();

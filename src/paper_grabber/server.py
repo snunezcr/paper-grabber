@@ -29,6 +29,7 @@ from pydantic import BaseModel
 
 from .drive import DriveClient, DriveError
 from .google_auth import DRIVE_SCOPES, AuthError, load_credentials
+from .refresh import RefreshRunner, make_refresh_job
 from .oauth_web import (
     CALLBACK_PATH,
     OAuthError,
@@ -68,9 +69,47 @@ class NewFolderIn(BaseModel):
     parent_id: str
 
 
-def create_app(ledger_path: Path, *, drive_factory=None, oauth: WebOAuth | None = None) -> FastAPI:
+def create_app(
+    ledger_path: Path,
+    *,
+    drive_factory=None,
+    oauth: WebOAuth | None = None,
+    refresh_runner: RefreshRunner | None = None,
+    cache_path: Path | None = None,
+    mailto: str | None = None,
+    refresh_days: int = 7,
+) -> FastAPI:
     app = FastAPI(title="Research Stream", docs_url=None, redoc_url=None)
     auth = oauth or WebOAuth()
+
+    def default_source():
+        """Mail source for a manual check: the signed-in account, else IMAP."""
+        from .gmail import GmailClient
+        from .imap_source import ImapAlertSource, ImapConfig
+
+        creds = auth.credentials()
+        if creds is not None:
+            client = GmailClient(creds)
+
+            class _Adapter:
+                @staticmethod
+                def fetch_alerts(*, since_days=2, skip=None, limit=None):
+                    return client.fetch_alerts(
+                        newer_than_days=since_days, skip=skip, limit=limit
+                    )
+
+            return _Adapter()
+        return ImapAlertSource(ImapConfig.from_env())
+
+    runner = refresh_runner or RefreshRunner(
+        make_refresh_job(
+            ledger_path=ledger_path,
+            cache_path=cache_path,
+            mailto=mailto,
+            days=refresh_days,
+            source_factory=default_source,
+        )
+    )
 
     def open_ledger() -> Ledger:
         # SQLite connections are not shareable across threads, so each request
@@ -214,6 +253,20 @@ def create_app(ledger_path: Path, *, drive_factory=None, oauth: WebOAuth | None 
             return drive.create_folder(name, parent_id=body.parent_id)
         except DriveError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post("/api/refresh")
+    def start_refresh() -> JSONResponse:
+        """Check mail now, without waiting for the daily run."""
+        started, state = runner.start()
+        # 202 whether or not we started one: a second tap while a check is in
+        # flight is not an error, it just joins the one already running.
+        return JSONResponse(
+            {"started": started, **state.to_dict()}, status_code=202
+        )
+
+    @app.get("/api/refresh")
+    def refresh_status() -> dict[str, Any]:
+        return runner.state().to_dict()
 
     @app.get("/api/version")
     def version() -> dict[str, Any]:

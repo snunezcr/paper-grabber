@@ -344,7 +344,17 @@ def cmd_serve(args) -> int:
     print(f"triage UI on http://{args.host}:{args.port}  (ledger: {args.ledger})")
     print("sign in from http://localhost:%d -- Google rejects other origins over http"
           % args.port)
-    uvicorn.run(create_app(args.ledger), host=args.host, port=args.port, log_level="warning")
+    uvicorn.run(
+        create_app(
+            args.ledger,
+            cache_path=args.cache,
+            mailto=args.mailto,
+            refresh_days=args.days,
+        ),
+        host=args.host,
+        port=args.port,
+        log_level="warning",
+    )
     return 0
 
 
@@ -590,6 +600,10 @@ def main(argv: list[str] | None = None) -> int:
     sv.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
     sv.add_argument("--host", default="0.0.0.0")
     sv.add_argument("--port", type=int, default=8823)
+    sv.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
+    sv.add_argument("--mailto", help="contact address for OpenAlex's polite pool")
+    sv.add_argument("--days", type=int, default=7,
+                    help="how far back a manual check looks")
     sv.set_defaults(func=cmd_serve)
 
     pd = sub.add_parser("pending", help="list papers awaiting triage")
