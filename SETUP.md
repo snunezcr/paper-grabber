@@ -87,52 +87,31 @@ paper-grabber upload        # send to Drive, delete local only once verified
 paper-grabber serve         # triage UI
 ```
 
-## 5. Running it daily
+## 5. Running it
 
-The unattended half of the pipeline — sync, enrich, fetch, upload — runs on a
-systemd **user** timer. Triage and filing are not in it: those are decisions,
-and they happen in the web app whenever you get to them.
-
-Put the credentials in an environment file (the unit deliberately does not
-carry them, because unit files are world-readable and `systemctl cat` would
-print the password):
+Everything is driven by hand. **Check now** in the app fetches new alerts and
+enriches them; the Upload button on a filed card fetches the PDF and sends it
+to Drive.
 
 ```bash
-mkdir -p ~/.config/paper-grabber
-install -m 600 /dev/null ~/.config/paper-grabber/env
-cat > ~/.config/paper-grabber/env <<'EOF'
-PAPER_GRABBER_IMAP_USER=snunezcr@gmail.com
-PAPER_GRABBER_IMAP_PASSWORD=xxxx xxxx xxxx xxxx
-OPENALEX_MAILTO=snunezcr@gmail.com
-EOF
+paper-grabber serve          # the app: triage, filing, check, upload
 ```
 
-Install and start the timer:
+The equivalent commands, if you prefer a terminal:
 
 ```bash
-cp systemd/research-stream-sync.{service,timer} ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now research-stream-sync.timer
+paper-grabber sync           # pull new alerts into the ledger
+paper-grabber enrich-pending # DOIs, abstracts, open-access locations
+paper-grabber fetch          # download PDFs for accepted papers
+paper-grabber upload         # send staged PDFs to their chosen folders
 ```
 
-Check it:
+Credentials live in `~/.config/paper-grabber/env` (mode 0600). Load them with:
 
 ```bash
-systemctl --user list-timers research-stream-sync.timer
-systemctl --user start research-stream-sync.service   # run it now
-journalctl --user -u research-stream-sync.service -n 50
-```
-
-`Persistent=true` matters on a laptop: if the machine is asleep at 06:00 the
-job runs on the next wake rather than silently skipping the day. Each step is
-allowed to fail without killing the run, so a morning where OpenAlex is out of
-budget still syncs mail.
-
-To keep the triage UI available, run it as its own long-lived service or just
-start it by hand when you want it:
-
-```bash
-paper-grabber serve
+export UV_ENV_FILE=~/.config/paper-grabber/env   # then: uv run paper-grabber ...
+# or
+set -a; source ~/.config/paper-grabber/env; set +a
 ```
 
 ## Why mail uses IMAP and not OAuth
