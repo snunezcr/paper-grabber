@@ -848,3 +848,19 @@ def test_blocked_copy_still_shows_the_entry(client):
     body = client.get("/").text
     assert 'id="citebox"' in body
     assert "showCitation" in body
+
+
+def test_cite_is_pinned_to_the_right_of_the_action_row(client):
+    body = client.get("/").text
+    rule = body.split(".filed-actions .cite")[1].split("}")[0]
+    assert "margin-left: auto" in rule
+
+
+def test_cite_comes_last_in_every_action_row(client):
+    # margin-left:auto only pushes it right if nothing follows it.
+    body = client.get("/").text
+    for name in ("filingCard", "processedCard"):
+        block = body.split(f"function {name}")[1].split("\nasync function")[0]
+        for seg in block.split("innerHTML"):
+            if 'class="cite"' in seg and "cardstatus" in seg:
+                assert seg.index('class="cite"') > seg.index("cardstatus")

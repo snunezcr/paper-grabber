@@ -229,7 +229,7 @@
   }
   .basefolder { color: var(--muted); font-size: .9rem; }
   .linkbtn { background: none; border: 0; color: var(--accent); cursor: pointer; font-size: .9rem; min-height: 44px; padding: 0 .25rem; }
-  .filed-actions { margin-top: .5rem; }
+  .filed-actions { margin-top: .5rem; align-items: center; flex-wrap: wrap; }
   .filed-actions button { min-height: 44px; font-size: .9rem; }
   .filed-actions .up { border-color: var(--accept); color: var(--accept); }
   .filed-actions .verify { flex: 0 0 auto; padding: 0 .9rem; }
@@ -304,7 +304,9 @@
     border: 1px solid var(--accent); border-radius: 10px;
     background: var(--accent); color: #fff; font-weight: 600;
   }
-  .filed-actions .cite { flex: 0 0 auto; padding: 0 .9rem; }
+  /* Pinned right: it is the one control that is never the primary action
+     on any of these cards, so it should not sit where the eye lands first. */
+  .filed-actions .cite { flex: 0 0 auto; padding: 0 .9rem; margin-left: auto; }
 
   #empty, #error, .note { text-align: center; color: var(--muted); padding: 2.5rem 1rem; }
   #error { color: var(--reject); padding: 1rem; }
@@ -712,8 +714,8 @@ function filingCard(p, {selectable}) {
     const actions = document.createElement('div');
     actions.className = 'actions filed-actions';
     actions.innerHTML = `
-      <button class="cite">Cite</button>
-      <span class="cardstatus" hidden></span>`;
+      <span class="cardstatus" hidden></span>
+      <button class="cite">Cite</button>`;
     actions.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
     el.querySelector('.pick > div:last-child').appendChild(actions);
   } else {
@@ -723,16 +725,16 @@ function filingCard(p, {selectable}) {
     actions.className = 'actions filed-actions';
     if (p.uploaded) {
       actions.innerHTML = `
-        <button class="cite">Cite</button>
         <span class="done">In Drive</span>
-        <span class="cardstatus" hidden></span>`;
+        <span class="cardstatus" hidden></span>
+        <button class="cite">Cite</button>`;
       actions.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
     } else {
       actions.innerHTML = `
         <button class="up">Upload</button>
         <button class="unfile">Not yet</button>
-        <button class="cite">Cite</button>
-        <span class="cardstatus" hidden></span>`;
+        <span class="cardstatus" hidden></span>
+        <button class="cite">Cite</button>`;
       actions.querySelector('.up').addEventListener('click', () => uploadOne(p, el));
       actions.querySelector('.unfile').addEventListener('click', () => unfile(p));
       actions.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
@@ -893,9 +895,9 @@ function processedCard(p) {
         ? `<a class="open" href="${esc(p.drive_url)}" target="_blank" rel="noopener">Open in Drive</a>`
         : ''}
       <button class="verify">Check</button>
-      <button class="cite">Cite</button>
       <span class="done">${p.dest_folder_name ? '→ ' + esc(p.dest_folder_name) : 'In Drive'}</span>
       <span class="cardstatus" hidden></span>
+      <button class="cite">Cite</button>
     </div>`;
   wireAbstract(el);
   el.querySelector('.verify').addEventListener('click', () => verifyOne(p, el));
