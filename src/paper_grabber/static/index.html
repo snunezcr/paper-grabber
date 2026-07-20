@@ -392,36 +392,6 @@
     background: var(--accent); color: #fff;
   }
 
-  #citebox {
-    position: fixed; inset: 0; z-index: 25; display: grid; place-items: center;
-    background: rgba(0,0,0,.45); padding: 1.2rem;
-  }
-  .citepanel {
-    background: var(--sheet); border: 1px solid var(--line); border-radius: 12px;
-    padding: 1rem; width: min(40rem, 100%);
-  }
-  .citepanel p { margin: 0 0 .6rem; font-size: .9rem; color: var(--muted); }
-  #citetext {
-    width: 100%; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-    background: var(--bg); color: var(--ink); border: 1px solid var(--line);
-    border-radius: 8px; padding: .6rem; resize: vertical;
-  }
-  #citeclose {
-    margin-top: .7rem; min-height: 44px; padding: 0 1.1rem; cursor: pointer;
-    border: 1px solid var(--accent); border-radius: 10px;
-    background: var(--accent); color: #fff; font-weight: 600;
-  }
-  /* Pinned right: it is the one control that is never the primary action
-     on any of these cards, so it should not sit where the eye lands first. */
-  .note-text {
-    margin: .5rem 0 .1rem; padding: .5rem .6rem; font-size: .89rem;
-    border-left: 3px solid var(--accent); background: var(--bg);
-    border-radius: 0 8px 8px 0; white-space: pre-wrap; overflow-wrap: anywhere;
-  }
-  /* Note and Cite are the pair pushed right. Whichever comes first in the
-     row takes the auto margin; the second sits against it rather than being
-     pushed to a second gap of its own. */
-  .filed-actions .note,
   .filed-actions .cite { flex: 0 0 auto; padding: 0 .9rem; margin-left: auto; }
   .filed-actions .note + .cite { margin-left: 0; }
   .filed-actions .suggest {
