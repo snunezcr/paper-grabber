@@ -864,3 +864,42 @@ def test_cite_comes_last_in_every_action_row(client):
         for seg in block.split("innerHTML"):
             if 'class="cite"' in seg and "cardstatus" in seg:
                 assert seg.index('class="cite"') > seg.index("cardstatus")
+
+
+# --- search -------------------------------------------------------------------
+
+
+def test_page_has_a_search_box(client):
+    body = client.get("/").text
+    assert 'id="q"' in body
+    assert 'id="qclear"' in body
+
+
+def test_search_covers_the_fields_worth_searching(client):
+    body = client.get("/").text
+    hay = body.split("function searchHaystack")[1].split("}")[0]
+    for field in ("p.title", "p.authors", "p.venue", "p.abstract", "p.doi"):
+        assert field in hay
+
+
+def test_search_is_accent_insensitive(client):
+    # "Schrodinger" must find "Schrödinger".
+    body = client.get("/").text
+    assert "normalize('NFKD')" in body
+    assert "\\u0300-\\u036f" in body
+
+
+def test_search_requires_every_term(client):
+    # More words should narrow, not widen.
+    body = client.get("/").text
+    assert "terms.every(t => hay.includes(t))" in body
+
+
+def test_search_and_alert_filter_compose(client):
+    # The match count is relative to the alert selection, not the whole queue.
+    body = client.get("/").text
+    assert "byAlert(state.pending || []).filter(p => matchesQuery(p, terms))" in body
+
+
+def test_empty_search_result_names_the_query(client):
+    assert 'Nothing matches "${state.query}".' in client.get("/").text

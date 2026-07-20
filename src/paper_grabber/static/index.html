@@ -138,6 +138,31 @@
     text-transform: none; letter-spacing: 0; font-weight: 600;
     color: var(--ink); font-size: .82rem;
   }
+  .fsearch { padding-top: .55rem; }
+  .shlabel {
+    display: block; margin-bottom: .35rem;
+    font-size: .78rem; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .searchrow { position: relative; display: flex; }
+  #q {
+    width: 100%; min-height: 40px; padding: 0 2rem 0 .6rem;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--card); color: var(--ink); font-size: .9rem;
+  }
+  #q:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  #q::-webkit-search-cancel-button { display: none; }
+  #qclear {
+    position: absolute; right: .2rem; top: 50%; transform: translateY(-50%);
+    width: 28px; height: 28px; cursor: pointer; border: 0; border-radius: 6px;
+    background: none; color: var(--muted); font-size: 1.1rem; line-height: 1;
+  }
+  .qcount {
+    margin-top: .35rem; font-size: .8rem; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .qcount.none { color: var(--reject); }
+
   .optbar { display: flex; gap: .4rem; margin: .2rem 0 .4rem; }
   .optbar button {
     flex: 1; min-height: 34px; font-size: .78rem; cursor: pointer;
@@ -355,6 +380,16 @@
     <span class="shtitle">Filters</span>
     <button id="sidebarcollapse" title="Hide filters" aria-label="Hide filters">&laquo;</button>
   </div>
+  <div class="fgroup fsearch">
+    <label class="shlabel" for="q">Search</label>
+    <div class="searchrow">
+      <input id="q" type="search" placeholder="title, author, venue, abstract"
+             autocomplete="off" spellcheck="false">
+      <button id="qclear" title="Clear search" aria-label="Clear search" hidden>&times;</button>
+    </div>
+    <div id="qcount" class="qcount" hidden></div>
+  </div>
+
   <details class="fgroup" id="fg-alerts" open>
     <summary>Alerts <span class="sel" id="alertsel">All</span></summary>
     <div class="options">
@@ -431,7 +466,8 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
-              pending: [], alerts: new Set(), knownAlerts: new Set() };
+              pending: [], alerts: new Set(), knownAlerts: new Set(),
+              query: '' };
 
 // Capabilities this page expects the server to have.
 const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex'];
@@ -656,11 +692,46 @@ function renderAlertFilter() {
     : `${chosen} of ${counts.size}`;
 }
 
-function visiblePending() {
-  const papers = state.pending || [];
+// Accent-insensitive, so "Schrodinger" finds "Schrödinger".
+function fold(text) {
+  return String(text ?? '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function searchHaystack(p) {
+  // Abstracts are worth searching now that most papers have a real one.
+  return fold([
+    p.title,
+    (p.authors || []).join(' '),
+    p.venue,
+    p.abstract,
+    p.doi,
+  ].filter(Boolean).join(' \u0000 '));
+}
+
+function matchesQuery(p, terms) {
+  if (!terms.length) return true;
+  const hay = searchHaystack(p);
+  // Every term must appear: typing more words narrows, which is what people
+  // expect from a search box.
+  return terms.every(t => hay.includes(t));
+}
+
+function queryTerms() {
+  return fold(state.query || '').split(/\s+/).filter(Boolean);
+}
+
+function byAlert(papers) {
   // Only one alert: there is no filter to apply, and the group is hidden.
   if (alertCounts().size < 2) return papers;
   return papers.filter(p => state.alerts.has(alertOf(p)));
+}
+
+function visiblePending() {
+  const terms = queryTerms();
+  return byAlert(state.pending || []).filter(p => matchesQuery(p, terms));
 }
 
 function renderTriage() {
@@ -668,13 +739,28 @@ function renderTriage() {
   const shown = visiblePending();
   $('#list').replaceChildren(...shown.map(triageCard));
 
+  const terms = queryTerms();
   const nothingChosen = alertCounts().size > 1 && state.alerts.size === 0;
   $('#empty').hidden = shown.length > 0;
-  $('#empty').textContent = nothingChosen
-    ? 'No alerts selected. Tick one at the left, or press All.'
-    : (state.pending || []).length
-      ? 'Nothing left in this selection.'
-      : 'Nothing to triage. Press Check now.';
+  $('#empty').textContent = terms.length && !shown.length
+    ? `Nothing matches "${state.query}".`
+    : nothingChosen
+      ? 'No alerts selected. Tick one at the left, or press All.'
+      : (state.pending || []).length
+        ? 'Nothing left in this selection.'
+        : 'Nothing to triage. Press Check now.';
+
+  renderSearchCount(shown.length, terms.length);
+}
+
+function renderSearchCount(shown, hasTerms) {
+  const el = $('#qcount');
+  $('#qclear').hidden = !state.query;
+  if (!hasTerms) { el.hidden = true; return; }
+  const total = byAlert(state.pending || []).length;
+  el.textContent = `${shown} of ${total} match`;
+  el.classList.toggle('none', shown === 0);
+  el.hidden = false;
 }
 
 async function loadTriage() {
@@ -1211,6 +1297,29 @@ function showNotice(msg) {
   clearTimeout(showNotice.t);
   showNotice.t = setTimeout(() => { el.hidden = true; }, 3500);
 }
+
+// ---------- search ----------
+
+const searchInput = $('#q');
+
+searchInput.addEventListener('input', () => {
+  state.query = searchInput.value;
+  renderTriage();
+});
+
+$('#qclear').addEventListener('click', () => {
+  state.query = '';
+  searchInput.value = '';
+  searchInput.focus();
+  renderTriage();
+});
+
+searchInput.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && state.query) {
+    e.preventDefault();
+    $('#qclear').click();
+  }
+});
 
 // ---------- sidebar ----------
 
