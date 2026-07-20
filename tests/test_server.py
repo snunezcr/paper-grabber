@@ -1036,3 +1036,10 @@ def test_rejected_is_not_a_tab(client):
     # is showing.
     body = client.get("/").text
     assert "$('#view-rejected').hidden = tab !== 'rejected';" in body
+
+
+def test_rejected_button_has_no_count(client):
+    body = client.get("/").text
+    bar = body.split('<div class="titlebar">')[1].split("</div>")[0]
+    assert "badge-rejected" not in bar
+    assert ">Rejected</button>" in bar

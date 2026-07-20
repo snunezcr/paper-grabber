@@ -42,7 +42,6 @@
     background: none; color: var(--reject); font-size: .88rem; font-weight: 600;
   }
   #rejectedbtn[aria-pressed="true"] { background: var(--reject); color: #fff; }
-  #rejectedbtn .badge { background: none; color: inherit; }
   .filed-actions .recover { flex: 0 0 auto; padding: 0 .9rem;
     border-color: var(--accept); color: var(--accept); }
 
@@ -374,7 +373,7 @@
     <h1>Research Stream</h1>
     <span id="counts"></span>
     <button id="rejectedbtn" class="danger" aria-pressed="false"
-            title="Show rejected papers">Rejected<span class="badge" id="badge-rejected">0</span></button>
+            title="Show rejected papers">Rejected</button>
     <button id="check" title="Check Gmail for new alerts now">
       <span class="spin" hidden></span><span class="label">Check now</span>
     </button>
@@ -545,7 +544,6 @@ function showCounts(c) {
     `${c.processed || 0} in Drive`;
   $('#badge-triage').textContent = c.pending || 0;
   $('#badge-processed').textContent = c.processed || 0;
-  $('#badge-rejected').textContent = c.rejected || 0;
 }
 
 // ---------- triage ----------
