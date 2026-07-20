@@ -90,20 +90,33 @@
     padding: 1rem .75rem 1rem 1rem;
     max-height: calc(100vh - var(--header-h, 6.5rem)); overflow-y: auto;
   }
-  #filtertoggle {
-    display: inline-flex; align-items: center; gap: .4rem;
-    margin: .45rem 0 0 1rem; min-height: 38px; padding: 0 .8rem;
-    cursor: pointer; border: 1px solid var(--line); border-radius: 8px;
-    background: var(--card); color: var(--ink); font-size: .84rem;
-    font-weight: 600;
+  /* Wide screens use the sidebar's own arrows; this is the drawer handle. */
+  #filtertoggle { display: none; }
+  /* Its own row, sticky to the top of the sidebar. Absolutely positioning it
+     over the first group put it on top of that group's disclosure arrow. */
+  #sidebarhead {
+    position: sticky; top: 0; z-index: 2; background: var(--bg);
+    display: flex; align-items: center; gap: .5rem;
+    padding: .1rem 0 .5rem; margin-bottom: .25rem;
+    border-bottom: 1px solid var(--line);
+  }
+  #sidebarhead .shtitle {
+    font-size: .78rem; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--muted);
   }
   #sidebarcollapse {
-    position: absolute; top: .55rem; right: .35rem;
-    width: 30px; height: 30px; line-height: 1; cursor: pointer;
-    border: 1px solid var(--line); border-radius: 7px;
-    background: var(--card); color: var(--muted); font-size: .9rem;
+    margin-left: auto; width: 32px; height: 32px; line-height: 1;
+    cursor: pointer; border: 1px solid var(--line); border-radius: 7px;
+    background: var(--card); color: var(--muted); font-size: .95rem;
   }
-  #sidebar { position: relative; }
+  #sidebarexpand {
+    display: none; position: sticky; top: var(--header-h, 6.5rem);
+    margin: 1rem 0 0 .5rem; width: 32px; height: 32px; line-height: 1;
+    cursor: pointer; border: 1px solid var(--line); border-radius: 7px;
+    background: var(--card); color: var(--muted); font-size: .95rem;
+    flex: 0 0 auto; align-self: flex-start;
+  }
+  body.sidebar-collapsed #sidebarexpand { display: block; }
 
   /* Collapsed: the sidebar leaves the flow entirely so the content reclaims
      its width, rather than shrinking to a stub that still costs space. */
@@ -143,7 +156,14 @@
   }
 
   @media (max-width: 800px) {
-    #sidebarcollapse { display: none; }
+    #sidebarhead, #sidebarexpand { display: none; }
+    #filtertoggle {
+      display: inline-flex; align-items: center; margin: .45rem 0 0 1rem;
+      min-height: 40px; padding: 0 .9rem; cursor: pointer;
+      border: 1px solid var(--line); border-radius: 8px;
+      background: var(--card); color: var(--ink); font-size: .85rem;
+      font-weight: 600;
+    }
     /* Below this width the sidebar is a drawer, so "collapsed" is not a
        separate state -- closed is the resting position. */
     body.sidebar-collapsed #sidebar { display: block; }
@@ -306,8 +326,12 @@
 <button id="filtertoggle" aria-expanded="false" aria-controls="sidebar">Filters</button>
 
 <div id="shell">
+<button id="sidebarexpand" title="Show filters" aria-label="Show filters">&raquo;</button>
 <aside id="sidebar" aria-label="Filters">
-  <button id="sidebarcollapse" title="Hide filters" aria-label="Hide filters">&laquo;</button>
+  <div id="sidebarhead">
+    <span class="shtitle">Filters</span>
+    <button id="sidebarcollapse" title="Hide filters" aria-label="Hide filters">&laquo;</button>
+  </div>
   <details class="fgroup" id="fg-alerts" open>
     <summary>Alerts <span class="sel" id="alertsel">All</span></summary>
     <div class="options">
@@ -1146,6 +1170,7 @@ function toggleSidebar() {
 
 filterToggle.addEventListener('click', toggleSidebar);
 $('#sidebarcollapse').addEventListener('click', () => setCollapsed(true));
+$('#sidebarexpand').addEventListener('click', () => setCollapsed(false));
 
 // Restore the choice, but only for the wide layout -- a drawer that opened
 // itself on load would cover the papers.
@@ -1169,7 +1194,8 @@ document.addEventListener('click', e => {
 });
 
 function updateFilterToggle() {
-  filterToggle.textContent = sidebarIsShowing() ? 'Hide filters' : 'Filters';
+  // Only ever the drawer handle now; the wide layout uses the arrows.
+  filterToggle.textContent = 'Filters';
 }
 
 // Filters apply to the triage queue only, for now.

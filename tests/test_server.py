@@ -762,7 +762,26 @@ def test_sidebar_sticks_at_the_measured_header_height(client):
 def test_sidebar_can_be_collapsed(client):
     body = client.get("/").text
     assert 'id="sidebarcollapse"' in body
+    assert 'id="sidebarexpand"' in body
     assert "sidebar-collapsed" in body
+
+
+def test_collapse_arrow_has_its_own_row(client):
+    # Absolutely positioning it over the first group put it on top of that
+    # group's disclosure arrow.
+    body = client.get("/").text
+    assert '<div id="sidebarhead">' in body
+    assert "position: absolute; top: .55rem; right: .35rem;" not in body
+
+
+def test_collapse_arrow_stays_put_while_the_sidebar_scrolls(client):
+    body = client.get("/").text
+    assert "#sidebarhead {\n    position: sticky; top: 0;" in body
+
+
+def test_only_one_collapse_control_on_wide_screens(client):
+    # The header button is the drawer handle; wide layouts use the arrows.
+    assert "#filtertoggle { display: none; }" in client.get("/").text
 
 
 def test_collapsed_sidebar_leaves_the_flow(client):
