@@ -412,18 +412,56 @@ def cmd_backfill_abstracts(args) -> int:
     return 0
 
 
+def _is_public_bind(host: str) -> bool:
+    """Whether this bind exposes the app beyond the local machine and tailnet.
+
+    The API has no authentication, so binding a public interface hands Drive
+    folder browsing and filing to anyone who can reach the port. Loopback and
+    the Tailscale range (100.64.0.0/10) are safe; 0.0.0.0 and a public IP are
+    not.
+    """
+    import ipaddress
+
+    if host in ("127.0.0.1", "localhost", "::1"):
+        return False
+    if host == "0.0.0.0" or host == "::":
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return True  # a hostname we cannot vet -- assume the worst
+    if addr in ipaddress.ip_network("100.64.0.0/10"):  # Tailscale CGNAT range
+        return False
+    return not (addr.is_private or addr.is_loopback)
+
+
 def cmd_serve(args) -> int:
     """Run the triage web app."""
+    import sys
+
     import uvicorn
 
+    from . import __version__
     from .server import create_app
 
-    # 0.0.0.0 by default: the whole point is reaching this from the tablet.
-    # On an untrusted network, bind 127.0.0.1 and reach it over Tailscale.
-    from . import __version__
+    if _is_public_bind(args.host) and not args.allow_public:
+        print(
+            f"Refusing to bind {args.host}: the web API has no authentication, so\n"
+            "this would expose triage, filing and your Drive folders to anyone who\n"
+            "can reach the port.\n\n"
+            "On a server, bind 127.0.0.1 and put Tailscale in front:\n"
+            "    paper-grabber serve --host 127.0.0.1\n"
+            "    tailscale serve --bg 8823\n\n"
+            "If you genuinely mean to bind a public interface, pass --allow-public.",
+            file=sys.stderr,
+        )
+        return 2
 
     print(f"Research Stream {__version__}")
     print(f"triage UI on http://{args.host}:{args.port}  (ledger: {args.ledger})")
+    if _is_public_bind(args.host):
+        print("WARNING: bound to a public interface with no authentication.",
+              file=sys.stderr)
     print("sign in from http://localhost:%d -- Google rejects other origins over http"
           % args.port)
     uvicorn.run(
@@ -699,6 +737,8 @@ def main(argv: list[str] | None = None) -> int:
     sv.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
     sv.add_argument("--host", default="0.0.0.0")
     sv.add_argument("--port", type=int, default=8823)
+    sv.add_argument("--allow-public", action="store_true",
+                    help="bind a public interface despite there being no auth")
     sv.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     sv.add_argument("--mailto", help="contact address for OpenAlex's polite pool")
     sv.add_argument("--days", type=int, default=7,

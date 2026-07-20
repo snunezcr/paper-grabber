@@ -125,8 +125,9 @@ anything that matters:
 - **Single user.** One ledger, one token, no accounts. The web API has **no
   authentication** — anyone who can reach the port can triage and file. Bind to
   `127.0.0.1` or keep it on a private network.
-- **Not deployable as-is.** Staging is local disk, job state is in-process, and
-  sign-in assumes one person.
+- **Single-machine.** Staging is local disk and job state is in-process, so it
+  runs as one server, not a horizontally-scaled service. For an always-on
+  personal deployment behind Tailscale, see [deploy/HETZNER.md](deploy/HETZNER.md).
 - **OpenAlex is metered** at $0.001/request against a $0.10 daily allowance.
   The free fallbacks cover the gap, with poorer abstract coverage.
 - **ResearchGate blocks automated requests**, so those papers get neither a PDF

@@ -1203,3 +1203,14 @@ def test_only_the_trailing_pair_is_right_aligned(client):
         rule_start = body.find(f".filed-actions {name} {{")
         if rule_start != -1:
             assert "margin-left: auto" not in body[rule_start:body.index("}", rule_start)]
+
+
+def test_public_bind_is_refused_without_the_flag():
+    from paper_grabber.cli import _is_public_bind
+    # Loopback and Tailscale's CGNAT range are safe; 0.0.0.0 and a public IP
+    # would expose an unauthenticated API.
+    assert _is_public_bind("127.0.0.1") is False
+    assert _is_public_bind("100.101.102.103") is False   # tailnet
+    assert _is_public_bind("192.168.1.5") is False        # home LAN
+    assert _is_public_bind("0.0.0.0") is True
+    assert _is_public_bind("49.12.200.10") is True        # a Hetzner IP

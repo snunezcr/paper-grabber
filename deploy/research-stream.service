@@ -1,0 +1,30 @@
+[Unit]
+Description=Research Stream triage web app
+Documentation=https://github.com/snunezcr/paper-grabber
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+
+# Credentials (OpenAlex key, optional IMAP app password) live here, mode 0600,
+# not in the unit -- unit files are world-readable and `systemctl cat` prints
+# them.
+EnvironmentFile=%h/.config/paper-grabber/env
+
+# Bind loopback only. The app has NO authentication; Tailscale is what makes it
+# reachable, and only from your own devices. Never bind a public interface.
+ExecStart=%h/paper-grabber/.venv/bin/paper-grabber serve --host 127.0.0.1 --port 8823
+
+Restart=on-failure
+RestartSec=5
+
+# The service needs only its own data and the repo.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/paper-grabber %h/.cache/paper-grabber %h/.config/paper-grabber
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
