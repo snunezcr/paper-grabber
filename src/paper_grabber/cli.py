@@ -338,7 +338,12 @@ def cmd_serve(args) -> int:
 
     # 0.0.0.0 by default: the whole point is reaching this from the tablet.
     # On an untrusted network, bind 127.0.0.1 and reach it over Tailscale.
+    from . import __version__
+
+    print(f"Research Stream {__version__}")
     print(f"triage UI on http://{args.host}:{args.port}  (ledger: {args.ledger})")
+    print("sign in from http://localhost:%d -- Google rejects other origins over http"
+          % args.port)
     uvicorn.run(create_app(args.ledger), host=args.host, port=args.port, log_level="warning")
     return 0
 

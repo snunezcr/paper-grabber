@@ -214,6 +214,21 @@ def create_app(ledger_path: Path, *, drive_factory=None, oauth: WebOAuth | None 
         except DriveError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    @app.get("/api/version")
+    def version() -> dict[str, Any]:
+        """What code is actually serving this request.
+
+        Exists because a stale uvicorn process is indistinguishable from a bad
+        fix: both look like "the change did not work".
+        """
+        from . import __version__
+        from .oauth_web import _allow_loopback_http  # noqa: F401  (presence check)
+
+        return {
+            "version": __version__,
+            "loopback_http_supported": True,
+        }
+
     # --- sign-in ----------------------------------------------------------------
 
     @app.get("/api/auth/status")
