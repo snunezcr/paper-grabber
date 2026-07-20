@@ -89,7 +89,7 @@ def client(files: FakeFiles) -> DriveClient:
 @pytest.fixture
 def staged(tmp_path):
     area = StagingArea(tmp_path / "staging")
-    return area, area.stage("2026 - A Paper.pdf", CONTENT)
+    return area, area.stage("2026 A Paper.pdf", CONTENT)
 
 
 def http_error(status):

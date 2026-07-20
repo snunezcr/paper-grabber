@@ -14,7 +14,7 @@ def test_colon_becomes_spaced_dash():
 
 
 def test_colon_rewrite_in_full_filename():
-    assert pdf_filename("Test: this is a test", 2026) == "2026 - Test - this is a test.pdf"
+    assert pdf_filename("Test: this is a test", 2026) == "2026 Test - this is a test.pdf"
 
 
 def test_colon_without_trailing_space():
@@ -34,7 +34,7 @@ def test_real_title_with_colon():
         "Qyn: FPGA-Based Quantum Error Correction with Integrated Quantum Machine Learning",
         2026,
     ) == (
-        "2026 - Qyn - FPGA-Based Quantum Error Correction with "
+        "2026 Qyn - FPGA-Based Quantum Error Correction with "
         "Integrated Quantum Machine Learning.pdf"
     )
 
@@ -60,11 +60,11 @@ def test_control_characters_are_stripped():
 
 def test_unicode_is_preserved():
     # Accented titles are legal and must survive intact.
-    assert pdf_filename("Schrödinger Cat States", 2026) == "2026 - Schrödinger Cat States.pdf"
+    assert pdf_filename("Schrödinger Cat States", 2026) == "2026 Schrödinger Cat States.pdf"
 
 
 def test_missing_year_is_visible():
-    assert pdf_filename("A Title", None) == "Unknown - A Title.pdf"
+    assert pdf_filename("A Title", None) == "Unknown A Title.pdf"
 
 
 def test_leading_and_trailing_dashes_are_trimmed():
@@ -95,17 +95,17 @@ def test_long_title_is_truncated_in_filename():
 
 
 def test_deduplicate_leaves_free_names_alone():
-    assert deduplicate_filename("2026 - A.pdf", set()) == "2026 - A.pdf"
+    assert deduplicate_filename("2026 A.pdf", set()) == "2026 A.pdf"
 
 
 def test_deduplicate_appends_counter():
-    existing = {"2026 - A.pdf"}
-    assert deduplicate_filename("2026 - A.pdf", existing) == "2026 - A (2).pdf"
+    existing = {"2026 A.pdf"}
+    assert deduplicate_filename("2026 A.pdf", existing) == "2026 A (2).pdf"
 
 
 def test_deduplicate_skips_taken_counters():
-    existing = {"2026 - A.pdf", "2026 - A (2).pdf", "2026 - A (3).pdf"}
-    assert deduplicate_filename("2026 - A.pdf", existing) == "2026 - A (4).pdf"
+    existing = {"2026 A.pdf", "2026 A (2).pdf", "2026 A (3).pdf"}
+    assert deduplicate_filename("2026 A.pdf", existing) == "2026 A (4).pdf"
 
 
 def test_sanitize_is_idempotent():

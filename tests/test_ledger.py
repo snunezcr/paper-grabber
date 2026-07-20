@@ -313,13 +313,13 @@ def test_pending_papers_are_not_awaiting_download(ledger):
 
 def test_staged_paper_leaves_the_download_queue(ledger):
     key = accepted_key(ledger)
-    ledger.set_staged(key, "2026 - A.pdf")
+    ledger.set_staged(key, "2026 A.pdf")
     assert ledger.awaiting_download() == []
 
 
 def test_uploaded_paper_is_never_re_downloaded(ledger):
     key = accepted_key(ledger)
-    ledger.set_staged(key, "2026 - A.pdf")
+    ledger.set_staged(key, "2026 A.pdf")
     ledger.set_uploaded(key, "DRIVE1")
     assert ledger.awaiting_download() == []
     assert ledger.awaiting_upload() == []
@@ -327,7 +327,7 @@ def test_uploaded_paper_is_never_re_downloaded(ledger):
 
 def test_awaiting_upload_needs_both_a_file_and_a_destination(ledger):
     key = accepted_key(ledger)
-    ledger.set_staged(key, "2026 - A.pdf")
+    ledger.set_staged(key, "2026 A.pdf")
     assert ledger.awaiting_upload() == []  # no destination yet
 
     ledger.set_destination(key, "F1", "Folder")
@@ -342,7 +342,7 @@ def test_destination_without_a_staged_file_is_not_uploadable(ledger):
 
 def test_upload_clears_the_staging_claim(ledger):
     key = accepted_key(ledger)
-    ledger.set_staged(key, "2026 - A.pdf")
+    ledger.set_staged(key, "2026 A.pdf")
     ledger.set_destination(key, "F1", "Folder")
     ledger.set_uploaded(key, "DRIVE1")
     stored = ledger.get(key)
@@ -354,7 +354,7 @@ def test_upload_clears_the_staging_claim(ledger):
 def test_staging_claim_can_be_released(ledger):
     # A vanished staged file must return to the download queue.
     key = accepted_key(ledger)
-    ledger.set_staged(key, "2026 - A.pdf")
+    ledger.set_staged(key, "2026 A.pdf")
     ledger.set_staged(key, None)
     assert [p.key for p in ledger.awaiting_download()] == [key]
 
@@ -363,6 +363,6 @@ def test_staged_name_survives_a_title_change(ledger):
     # The whole reason the name is stored: enrichment can revise a title after
     # the file is already on disk under the old one.
     key = accepted_key(ledger)
-    ledger.set_staged(key, "2026 - Original Title.pdf")
+    ledger.set_staged(key, "2026 Original Title.pdf")
     ledger.attach_enrichment(key, {"title": "A Completely Revised Title"})
-    assert ledger.get(key).staged_name == "2026 - Original Title.pdf"
+    assert ledger.get(key).staged_name == "2026 Original Title.pdf"

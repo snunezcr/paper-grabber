@@ -1,4 +1,4 @@
-"""Build the saved PDF's filename: ``{YYYY} - {Title}.pdf``.
+"""Build the saved PDF's filename: ``{YYYY} {Title}.pdf``.
 
 Android, Google Drive, and every FAT-derived filesystem in between reject a
 handful of characters outright. Colons are the interesting case: they are both
@@ -20,7 +20,7 @@ _COLONS = re.compile(r"\s*:\s*")
 _DASH_RUN = re.compile(r"(?:\s-\s*){2,}")
 _WS = re.compile(r"\s+")
 
-# Leave room for the "YYYY - " prefix, the ".pdf" suffix, and a possible
+# Leave room for the "YYYY " prefix, the ".pdf" suffix, and a possible
 # " (2)" collision marker inside the common 255-byte limit.
 MAX_TITLE_CHARS = 180
 
@@ -52,14 +52,18 @@ def truncate_title(title: str, limit: int = MAX_TITLE_CHARS) -> str:
 
 
 def pdf_filename(title: str, year: int | None, *, suffix: str = ".pdf") -> str:
-    """Return ``{YYYY} - {Title}.pdf``.
+    """Return ``{YYYY} {Title}.pdf``.
 
-    An unknown year yields "Unknown" rather than a bare dash, so the missing
-    value is visible in a file listing instead of looking like a typo.
+    The year is separated by a space, not a dash: a dash there is easily
+    confused with the dashes that colons inside a title become.
+
+    An unknown year yields "Unknown" rather than nothing at all, so the gap is
+    visible in a file listing instead of the name simply starting with the
+    title and sorting somewhere unexpected.
     """
     safe = truncate_title(sanitize_title(title))
     stamp = str(year) if year else "Unknown"
-    return f"{stamp} - {safe}{suffix}"
+    return f"{stamp} {safe}{suffix}"
 
 
 def deduplicate_filename(name: str, existing: set[str]) -> str:

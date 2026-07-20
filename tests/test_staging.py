@@ -27,13 +27,13 @@ def remote(size=len(CONTENT), md5=GOOD_MD5, file_id="drive-1"):
 
 
 def test_stage_writes_the_file(area):
-    p = area.stage("2026 - A Paper.pdf", CONTENT)
+    p = area.stage("2026 A Paper.pdf", CONTENT)
     assert p.read_bytes() == CONTENT
-    assert p.name == "2026 - A Paper.pdf"
+    assert p.name == "2026 A Paper.pdf"
 
 
 def test_stage_leaves_no_partial_behind(area):
-    area.stage("2026 - A Paper.pdf", CONTENT)
+    area.stage("2026 A Paper.pdf", CONTENT)
     assert not any(f.name.endswith(PARTIAL_SUFFIX) for f in area.root.iterdir())
 
 
