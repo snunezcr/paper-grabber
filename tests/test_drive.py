@@ -197,38 +197,28 @@ def test_folder_id_passes_through_untouched():
     files = FakeFiles()
     fid = "1a2b3c4d5e6f7g8h9i0jKLMNOPqrstuv"
     assert client(files).resolve_folder(fid) == fid
-    assert files.list_queries == []  # no lookup needed
+    assert files.list_queries == []  # no lookup, so no metadata scope needed
 
 
-def test_folder_path_is_resolved_segment_by_segment():
-    files = FakeFiles(list_results=[
-        {"files": [{"id": "RESEARCH"}]},
-        {"files": [{"id": "PAPERS"}]},
-    ])
-    assert client(files).resolve_folder("Research/Papers") == "PAPERS"
-    assert "'root' in parents" in files.list_queries[0]
-    assert "'RESEARCH' in parents" in files.list_queries[1]
+def test_folder_path_is_refused_with_an_actionable_message():
+    # drive.file cannot see folders it did not create, so a path cannot be
+    # resolved. Better to say so than to fail obscurely at upload time.
+    files = FakeFiles()
+    with pytest.raises(DriveError, match="not a Drive folder ID"):
+        client(files).resolve_folder("Research/Papers")
 
 
-def test_missing_folder_is_reported():
-    files = FakeFiles(list_results=[{"files": []}])
-    with pytest.raises(DriveError, match="no folder named"):
-        client(files).resolve_folder("Nope")
-
-
-def test_ambiguous_folder_name_is_refused():
-    # Drive allows duplicate folder names; picking one at random would file
-    # papers somewhere the user did not intend.
-    files = FakeFiles(list_results=[{"files": [{"id": "A"}, {"id": "B"}]}])
-    with pytest.raises(DriveError, match="use a folder ID"):
+def test_folder_name_is_refused_too():
+    files = FakeFiles()
+    with pytest.raises(DriveError, match="copy the ID from the URL"):
         client(files).resolve_folder("Papers")
 
 
-def test_apostrophe_in_folder_name_is_escaped():
-    files = FakeFiles(list_results=[{"files": [{"id": "X"}]}])
-    client(files).resolve_folder("Nunez's papers")
-    # Unescaped, the quote would terminate the query early.
-    assert "\\'" in files.list_queries[0]
+def test_refusal_does_not_call_the_api():
+    files = FakeFiles()
+    with pytest.raises(DriveError):
+        client(files).resolve_folder("Papers")
+    assert files.list_queries == []
 
 
 # --- duplicate detection ------------------------------------------------------

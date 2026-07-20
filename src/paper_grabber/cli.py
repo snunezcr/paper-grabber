@@ -10,13 +10,18 @@ from pathlib import Path
 
 from .cache import LookupCache
 from .drive import DriveClient, DriveError
-from .gmail import ALERT_SENDERS, GmailClient, GmailError
+from .imap_source import (
+    GMAIL_ALL_MAIL,
+    ImapAlertSource,
+    ImapConfig,
+    ImapError,
+    check_login,
+)
 from .ledger import Decision, Ledger
 from .google_auth import (
     DEFAULT_CREDENTIALS,
     DEFAULT_TOKEN,
     DRIVE_SCOPES,
-    GMAIL_SCOPES,
     AuthError,
     load_credentials,
 )
@@ -171,30 +176,25 @@ DEFAULT_LEDGER = Path.home() / ".local" / "share" / "paper-grabber" / "state.db"
 
 
 def cmd_sync(args) -> int:
-    """Pull new Scholar alerts from Gmail into the ledger.
+    """Pull new Scholar alerts from the mailbox into the ledger.
 
     Messages already processed are skipped, and papers already decided are not
     resurrected, so running this twice in a row is a no-op.
     """
     try:
-        creds = load_credentials(
-            credentials_path=args.credentials,
-            token_path=args.token,
-            scopes=GMAIL_SCOPES,
-            allow_interactive=not args.non_interactive,
-        )
-    except AuthError as exc:
-        print(f"authorisation failed: {exc}", file=sys.stderr)
+        config = ImapConfig.from_env(user=args.user, mailbox=args.mailbox)
+    except ImapError as exc:
+        print(f"{exc}", file=sys.stderr)
         return 2
 
-    gmail = GmailClient(creds)
+    source = ImapAlertSource(config)
     with Ledger(args.ledger) as ledger:
         seen = ledger.seen_message_ids()
         new_papers = repeats = messages = 0
 
         try:
-            for msg in gmail.fetch_alerts(
-                newer_than_days=args.days, skip=seen, limit=args.limit
+            for msg in source.fetch_alerts(
+                since_days=args.days, skip=seen, limit=args.limit
             ):
                 messages += 1
                 for paper in dedupe(parse_alert_email(msg.raw)):
@@ -205,8 +205,8 @@ def cmd_sync(args) -> int:
                 # Marked only after its papers are recorded, so an interruption
                 # re-reads the message rather than losing it.
                 ledger.mark_message(msg.message_id)
-        except GmailError as exc:
-            print(f"gmail error: {exc}", file=sys.stderr)
+        except ImapError as exc:
+            print(f"mail error: {exc}", file=sys.stderr)
             return 1
 
         counts = ledger.counts()
@@ -214,6 +214,17 @@ def cmd_sync(args) -> int:
     print(f"{messages} new messages | {new_papers} new papers | {repeats} already known")
     print(f"pending {counts.get('pending', 0)} | "
           f"accepted {counts.get('accepted', 0)} | rejected {counts.get('rejected', 0)}")
+    return 0
+
+
+def cmd_check_mail(args) -> int:
+    """Confirm the app password works before wiring up a scheduled run."""
+    try:
+        config = ImapConfig.from_env(user=args.user, mailbox=args.mailbox)
+        print(check_login(config))
+    except ImapError as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 2
     return 0
 
 
@@ -336,10 +347,14 @@ def main(argv: list[str] | None = None) -> int:
     sy.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
     sy.add_argument("--days", type=int, default=2, help="how far back to search")
     sy.add_argument("--limit", type=int, help="cap messages fetched")
-    sy.add_argument("--credentials", type=Path, default=DEFAULT_CREDENTIALS)
-    sy.add_argument("--token", type=Path, default=DEFAULT_TOKEN)
-    sy.add_argument("--non-interactive", action="store_true")
+    sy.add_argument("--user", help="mailbox address (default: $PAPER_GRABBER_IMAP_USER)")
+    sy.add_argument("--mailbox", default=GMAIL_ALL_MAIL, help="IMAP folder to search")
     sy.set_defaults(func=cmd_sync)
+
+    ck = sub.add_parser("check-mail", help="verify IMAP credentials work")
+    ck.add_argument("--user")
+    ck.add_argument("--mailbox", default=GMAIL_ALL_MAIL)
+    ck.set_defaults(func=cmd_check_mail)
 
     pd = sub.add_parser("pending", help="list papers awaiting triage")
     pd.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)

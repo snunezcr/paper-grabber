@@ -1,5 +1,10 @@
 """Upload staged PDFs to Google Drive.
 
+Scope is drive.file only: this app can see and touch nothing in Drive except
+the files it created itself. The destination is therefore given as a folder ID
+rather than a path, since looking a folder up by name would need the sensitive
+drive.metadata.readonly scope.
+
 Every upload requests ``md5Checksum`` and ``size`` back, because those are what
 StagingArea.confirm() needs to prove the remote copy is intact before the local
 one is deleted. An upload that cannot report them is treated as unverified, and
@@ -21,7 +26,6 @@ from googleapiclient.http import MediaFileUpload
 from .staging import RemoteFile
 
 PDF_MIME = "application/pdf"
-FOLDER_MIME = "application/vnd.google-apps.folder"
 
 # Ask for exactly the fields confirmation depends on.
 _UPLOAD_FIELDS = "id,name,size,md5Checksum"
@@ -44,47 +48,20 @@ class DriveClient:
     # --- folders --------------------------------------------------------------
 
     def resolve_folder(self, spec: str) -> str:
-        """Turn a folder path or ID into a folder ID.
+        """Turn a folder ID into a folder ID, or explain why a path will not do.
 
-        A value with no "/" that looks like an ID is returned as-is, so a
-        configured ID keeps working even without metadata read scope.
+        Path lookup needs drive.metadata.readonly, a sensitive scope this app
+        deliberately does not request: drive.file alone cannot see folders it
+        did not create. The folder ID is the last path segment of the folder's
+        URL in Drive.
         """
-        if "/" not in spec and _looks_like_id(spec):
+        if _looks_like_id(spec):
             return spec
-
-        parent = "root"
-        for part in [p for p in spec.strip("/").split("/") if p]:
-            parent = self._child_folder_id(parent, part)
-        return parent
-
-    def _child_folder_id(self, parent: str, name: str) -> str:
-        # Escaping matters: a folder called "Nunez's papers" would otherwise
-        # terminate the query string early.
-        safe = name.replace("\\", "\\\\").replace("'", "\\'")
-        query = (
-            f"name = '{safe}' and mimeType = '{FOLDER_MIME}' "
-            f"and '{parent}' in parents and trashed = false"
+        raise DriveError(
+            f"{spec!r} is not a Drive folder ID. This app requests only the "
+            "drive.file scope, which cannot look folders up by name. Open the "
+            "folder in Drive and copy the ID from the URL after /folders/."
         )
-        try:
-            resp = (
-                self._service.files()
-                .list(q=query, fields="files(id,name)", pageSize=2)
-                .execute()
-            )
-        except HttpError as exc:
-            raise DriveError(f"could not list folder {name!r}: {exc}") from exc
-
-        files = resp.get("files", [])
-        if not files:
-            raise DriveError(f"no folder named {name!r} under {parent}")
-        if len(files) > 1:
-            # Drive permits duplicate names; guessing would file papers into an
-            # arbitrary one of them.
-            raise DriveError(
-                f"{len(files)} folders named {name!r} under {parent}; "
-                "use a folder ID instead"
-            )
-        return files[0]["id"]
 
     # --- upload ---------------------------------------------------------------
 

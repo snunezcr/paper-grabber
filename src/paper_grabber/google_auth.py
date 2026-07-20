@@ -22,15 +22,15 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 # delete, or alter anything in the mailbox.
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
-# drive.file grants access only to files this app creates -- it cannot read the
-# rest of the user's Drive. metadata.readonly is the minimum needed to resolve
-# a destination folder by name; without it the folder must be given as an ID.
-DRIVE_SCOPES = [
-    "https://www.googleapis.com/auth/drive.file",
-    "https://www.googleapis.com/auth/drive.metadata.readonly",
-]
+# drive.file grants access only to files this app creates -- it cannot see or
+# touch anything else in the user's Drive, and unlike drive.metadata.readonly it
+# is neither sensitive nor restricted. The cost is that the destination folder
+# must be given as an ID rather than looked up by name, which is a one-time
+# copy from the Drive URL.
+DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
-DEFAULT_SCOPES = GMAIL_SCOPES + DRIVE_SCOPES
+# Mail now arrives over IMAP with an app password, so OAuth covers Drive alone.
+DEFAULT_SCOPES = DRIVE_SCOPES
 
 DEFAULT_CREDENTIALS = Path("credentials.json")
 DEFAULT_TOKEN = Path.home() / ".config" / "paper-grabber" / "token.json"
