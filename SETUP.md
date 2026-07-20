@@ -4,95 +4,87 @@ Two credentials are needed: an **app password** for reading Scholar alert mail,
 and an **OAuth client** for writing PDFs to Drive. Mail deliberately does not
 use OAuth — see the note at the end.
 
-## 1. Mail: Gmail app password
+## 1. Sign in with Google (recommended)
 
-Requires 2-Step Verification on the account.
+One browser sign-in covers both mail and Drive — no app password, no
+`credentials.json` juggling on the command line.
 
-1. Enable 2-Step Verification: <https://myaccount.google.com/signinoptions/two-step-verification>
-2. Create an app password: <https://myaccount.google.com/apppasswords>
-   Name it `paper-grabber`. Google shows a 16-character string once.
-3. Put it in the environment:
+1. <https://console.cloud.google.com> → **New Project**.
+2. *APIs & Services → Library* → enable **Gmail API** and **Google Drive API**.
+3. *OAuth consent screen* → **External**, add yourself as a test user.
+4. **Set publishing status to "In production".** `gmail.readonly` is a
+   *restricted* scope; while the app is in *Testing*, Google expires refresh
+   tokens after 7 days and the scheduled run breaks every week. You will click
+   through an "unverified app" warning once — expected for a personal app.
+5. *Credentials → Create Credentials → OAuth client ID →
+   **Web application***.
+6. Under **Authorised redirect URIs**, add the callback for every origin you
+   will open the app from:
+
+   ```
+   http://localhost:8823/auth/google/callback
+   ```
+
+   …and, if you want to sign in from the tablet, your HTTPS origin too (see
+   below).
+7. Download the JSON to `credentials.json` in the repo root (gitignored).
+
+Then:
+
+```bash
+paper-grabber serve
+```
+
+Open **http://localhost:8823** on the machine running it and press
+**Sign in with Google**.
+
+### Signing in from the tablet needs HTTPS
+
+Google accepts plain `http` **only** for `localhost` and `127.0.0.1`. The
+tablet reaches the app at something like `http://10.7.146.150:8823`, which
+Google rejects outright — the app detects this and says so rather than failing
+at the consent screen.
+
+Two options:
+
+- **Sign in once from the laptop** at `http://localhost:8823`. The token is
+  stored server-side, so the tablet then works without ever signing in itself.
+  Simplest, and enough for a single user.
+- **Serve over HTTPS with Tailscale**, which gives a real certificate on a
+  `*.ts.net` name that can be registered as a redirect URI and reached from
+  the tablet.
+
+## 2. Mail over IMAP (alternative)
+
+Still supported, and it needs no browser at all — useful if a browser on this
+machine cannot reach Google. Requires 2-Step Verification.
+
+1. Create an app password: <https://myaccount.google.com/apppasswords>
+2. Export it:
 
    ```bash
    export PAPER_GRABBER_IMAP_USER=snunezcr@gmail.com
    export PAPER_GRABBER_IMAP_PASSWORD='xxxx xxxx xxxx xxxx'
-   ```
-
-   Spaces in the password are fine. Keep this out of shell history — put it in
-   a file only you can read (`chmod 600`) and source it, or use a systemd
-   `EnvironmentFile`.
-
-4. Check it:
-
-   ```bash
    paper-grabber check-mail
    ```
 
-   Prints how many Scholar alerts are in the last 30 days.
+`sync` prefers the Google sign-in when a token exists and falls back to IMAP
+otherwise; `--force-imap` overrides.
 
-IMAP no longer needs enabling in Gmail settings; it is always on.
+## 3. Destination folder
 
-## 2. Drive: OAuth client
+Open the app, go to **Filing**, and press **Change base folder** to browse your
+Drive and pick one. Papers are then filed into subfolders you choose from
+there.
 
-Drive has no app-password equivalent, so this part needs OAuth.
-
-1. <https://console.cloud.google.com> → **New Project** (`paper-grabber`).
-2. *APIs & Services → Library* → enable **Google Drive API**.
-   (The Gmail API is **not** needed — mail arrives over IMAP.)
-3. *OAuth consent screen* → **External** → add yourself under **Test users**.
-4. **Set publishing status to "In production".** While the app is in *Testing*,
-   Google expires refresh tokens after 7 days, which would break the scheduled
-   run every week. You will see an "unverified app" warning at consent; choose
-   *Advanced → Go to paper-grabber*. That is expected for a personal app.
-5. *Credentials → Create Credentials → OAuth client ID → **Desktop app***.
-   Download the JSON to `credentials.json` in the repo root (gitignored).
-
-The only scope requested is `drive.file`, which grants access **solely to files
-this app creates**. It cannot read, list, or modify anything else in your Drive.
-
-## 3. Authorise Drive
+## 4. Running commands
 
 ```bash
-paper-grabber auth
-```
-
-Opens a browser once, saves the token to `~/.config/paper-grabber/token.json`,
-and prints how many top-level folders it can see. This is the **only**
-interactive Drive step: `serve` and `upload` are both non-interactive by
-design, so without running this once there is no way to create the token.
-
-## 4. Destination folder
-
-Because `drive.file` cannot look folders up by name, give the folder **ID**.
-Open the destination folder in Drive and copy the part of the URL after
-`/folders/`:
-
-```
-https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz
-                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^ this
-```
-
-## Running
-
-```bash
-# pull new alerts into the ledger
-paper-grabber sync
-
-# see what is waiting
-paper-grabber pending
-
-# triage
-paper-grabber decide "Some Paper Title" accepted
-paper-grabber decide "Another Paper" rejected
-
-# fetch open-access PDFs into staging
-paper-grabber download --dest ~/.local/share/paper-grabber/staging tests/data/*.eml
-
-# upload to Drive; local copies are deleted only after Drive
-# confirms a matching size and MD5
-paper-grabber upload \
-  --staging ~/.local/share/paper-grabber/staging \
-  --folder 1AbCdEfGhIjKlMnOpQrStUvWxYz
+paper-grabber sync          # pull new alerts
+paper-grabber enrich-pending
+paper-grabber fetch         # download accepted papers
+paper-grabber upload        # send to Drive, delete local only once verified
+paper-grabber serve         # triage UI
 ```
 
 ## 5. Running it daily

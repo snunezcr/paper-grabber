@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .cache import LookupCache
 from .drive import DriveClient, DriveError
+from .gmail import GmailClient, GmailError
 from .imap_source import (
     GMAIL_ALL_MAIL,
     ImapAlertSource,
@@ -177,19 +178,53 @@ DEFAULT_LEDGER = Path.home() / ".local" / "share" / "paper-grabber" / "state.db"
 DEFAULT_STAGING = Path.home() / ".local" / "share" / "paper-grabber" / "staging"
 
 
+def _alert_source(args):
+    """Pick a mail source: the Google sign-in if present, else IMAP.
+
+    Preferring the OAuth token means the browser sign-in is enough on its own,
+    while an existing app-password setup keeps working untouched -- and IMAP
+    remains the fallback when a browser cannot reach Google at all.
+    """
+    from .oauth_web import WebOAuth
+
+    if not args.force_imap:
+        creds = WebOAuth().credentials()
+        if creds is not None:
+            return GmailAlertSource(GmailClient(creds))
+
+    try:
+        return ImapAlertSource(ImapConfig.from_env(user=args.user, mailbox=args.mailbox))
+    except ImapError as exc:
+        print(f"{exc}", file=sys.stderr)
+        print(
+            "  Or sign in with Google: run `paper-grabber serve` and use the "
+            "Sign in button.",
+            file=sys.stderr,
+        )
+        return None
+
+
+class GmailAlertSource:
+    """Adapts GmailClient to the interface sync expects."""
+
+    def __init__(self, client) -> None:
+        self._client = client
+
+    def fetch_alerts(self, *, since_days=2, skip=None, limit=None):
+        return self._client.fetch_alerts(
+            newer_than_days=since_days, skip=skip, limit=limit
+        )
+
+
 def cmd_sync(args) -> int:
     """Pull new Scholar alerts from the mailbox into the ledger.
 
     Messages already processed are skipped, and papers already decided are not
     resurrected, so running this twice in a row is a no-op.
     """
-    try:
-        config = ImapConfig.from_env(user=args.user, mailbox=args.mailbox)
-    except ImapError as exc:
-        print(f"{exc}", file=sys.stderr)
+    source = _alert_source(args)
+    if source is None:
         return 2
-
-    source = ImapAlertSource(config)
     with Ledger(args.ledger) as ledger:
         seen = ledger.seen_message_ids()
         new_papers = repeats = messages = 0
@@ -207,7 +242,7 @@ def cmd_sync(args) -> int:
                 # Marked only after its papers are recorded, so an interruption
                 # re-reads the message rather than losing it.
                 ledger.mark_message(msg.message_id)
-        except ImapError as exc:
+        except (ImapError, GmailError) as exc:
             print(f"mail error: {exc}", file=sys.stderr)
             return 1
 
@@ -523,6 +558,8 @@ def main(argv: list[str] | None = None) -> int:
     sy.add_argument("--limit", type=int, help="cap messages fetched")
     sy.add_argument("--user", help="mailbox address (default: $PAPER_GRABBER_IMAP_USER)")
     sy.add_argument("--mailbox", default=GMAIL_ALL_MAIL, help="IMAP folder to search")
+    sy.add_argument("--force-imap", action="store_true",
+                    help="use IMAP even if signed in with Google")
     sy.set_defaults(func=cmd_sync)
 
     au = sub.add_parser("auth", help="authorise Google Drive (opens a browser once)")

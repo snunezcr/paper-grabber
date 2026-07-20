@@ -17,11 +17,25 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi import Request
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+)
 from pydantic import BaseModel
 
 from .drive import DriveClient, DriveError
 from .google_auth import DRIVE_SCOPES, AuthError, load_credentials
+from .oauth_web import (
+    CALLBACK_PATH,
+    OAuthError,
+    WebOAuth,
+    callback_url,
+    is_valid_redirect,
+    redirect_hint,
+)
 from .ledger import (
     SETTING_BASE_FOLDER_ID,
     SETTING_BASE_FOLDER_NAME,
@@ -53,8 +67,9 @@ class NewFolderIn(BaseModel):
     parent_id: str
 
 
-def create_app(ledger_path: Path, *, drive_factory=None) -> FastAPI:
+def create_app(ledger_path: Path, *, drive_factory=None, oauth: WebOAuth | None = None) -> FastAPI:
     app = FastAPI(title="Research Stream", docs_url=None, redoc_url=None)
+    auth = oauth or WebOAuth()
 
     def open_ledger() -> Ledger:
         # SQLite connections are not shareable across threads, so each request
@@ -70,13 +85,17 @@ def create_app(ledger_path: Path, *, drive_factory=None) -> FastAPI:
         """
         if drive_factory is not None:
             return drive_factory()
-        try:
-            creds = load_credentials(scopes=DRIVE_SCOPES, allow_interactive=False)
-        except AuthError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Drive not authorised: {exc}",
-            ) from exc
+
+        # Prefer the token the browser sign-in wrote; fall back to the CLI's,
+        # so an existing desktop-flow token keeps working.
+        creds = auth.credentials()
+        if creds is None:
+            try:
+                creds = load_credentials(scopes=DRIVE_SCOPES, allow_interactive=False)
+            except AuthError as exc:
+                raise HTTPException(
+                    status_code=503, detail=f"Not signed in to Google: {exc}"
+                ) from exc
         return DriveClient(creds)
 
     @app.get("/", response_class=HTMLResponse)
@@ -195,4 +214,62 @@ def create_app(ledger_path: Path, *, drive_factory=None) -> FastAPI:
         except DriveError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    # --- sign-in ----------------------------------------------------------------
+
+    @app.get("/api/auth/status")
+    def auth_status(request: Request) -> dict[str, Any]:
+        base = str(request.base_url)
+        redirect = callback_url(base)
+        status = auth.status()
+        status["redirect_uri"] = redirect
+        status["redirect_ok"] = is_valid_redirect(redirect)
+        if not status["redirect_ok"]:
+            status["redirect_problem"] = redirect_hint(redirect)
+        return status
+
+    @app.get("/auth/google/start")
+    def auth_start(request: Request):
+        redirect = callback_url(str(request.base_url))
+        if not is_valid_redirect(redirect):
+            raise HTTPException(status_code=400, detail=redirect_hint(redirect))
+        try:
+            return RedirectResponse(auth.start(redirect), status_code=307)
+        except OAuthError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get(CALLBACK_PATH, response_class=HTMLResponse)
+    def auth_callback(request: Request, state: str = "", error: str = "") -> str:
+        if error:
+            return _closing_page(f"Google reported: {error}", ok=False)
+        try:
+            auth.finish(state=state, full_url=str(request.url))
+        except OAuthError as exc:
+            return _closing_page(str(exc), ok=False)
+        return _closing_page("Signed in. You can close this tab.", ok=True)
+
+    @app.post("/api/auth/signout")
+    def auth_signout() -> dict[str, bool]:
+        return {"signed_out": auth.sign_out()}
+
     return app
+
+
+def _closing_page(message: str, *, ok: bool) -> str:
+    """A minimal result page for the OAuth round trip.
+
+    Self-contained like the rest of the app: no CDN, and it tells the opener to
+    refresh so the sign-in state updates without the user hunting for a button.
+    """
+    colour = "#1a7f4b" if ok else "#a33"
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Research Stream</title></head>
+<body style="font:16px/1.6 system-ui,sans-serif;margin:0;display:grid;
+place-items:center;height:100vh;padding:1.5rem;text-align:center">
+<div><p style="color:{colour};font-weight:600">{message}</p>
+<p style="color:#6b6b6b;font-size:.9rem">You can return to the app.</p></div>
+<script>
+  try {{ if (window.opener) {{ window.opener.postMessage('auth-changed', '*'); }} }} catch (e) {{}}
+  setTimeout(() => {{ try {{ window.close(); }} catch (e) {{}} }}, {1200 if ok else 6000});
+</script>
+</body></html>"""

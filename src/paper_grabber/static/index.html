@@ -37,6 +37,17 @@
   .titlebar { display: flex; align-items: baseline; gap: .75rem; }
   .titlebar h1 { font-size: 1.05rem; margin: 0; font-weight: 600; }
   #counts { color: var(--muted); font-size: .85rem; font-variant-numeric: tabular-nums; }
+  #authbar {
+    display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+    margin-top: .45rem; font-size: .87rem; color: var(--muted);
+  }
+  #authbar a#signin {
+    display: inline-flex; align-items: center; min-height: 40px; padding: 0 .9rem;
+    border: 1px solid var(--accent); border-radius: 8px; color: var(--accent);
+    text-decoration: none; font-weight: 600;
+  }
+  #authbar.ok a#signin { display: none; }
+  #authbar.warn #authmsg { color: var(--reject); }
   nav { display: flex; gap: .25rem; margin-top: .5rem; }
   nav button {
     flex: 1; min-height: 44px; background: none; border: 0; cursor: pointer;
@@ -151,6 +162,11 @@
   <div class="titlebar">
     <h1>Research Stream</h1>
     <span id="counts"></span>
+  </div>
+  <div id="authbar" hidden>
+    <span id="authmsg"></span>
+    <a id="signin" href="/auth/google/start">Sign in with Google</a>
+    <button id="signout" class="linkbtn" hidden>Sign out</button>
   </div>
   <nav>
     <button id="tab-triage" aria-selected="true">Triage<span class="badge" id="badge-triage">0</span></button>
@@ -494,7 +510,49 @@ function selectTab(tab) {
 $('#tab-triage').addEventListener('click', () => selectTab('triage'));
 $('#tab-filing').addEventListener('click', () => selectTab('filing'));
 
+// ---------- sign-in ----------
+
+async function loadAuth() {
+  try {
+    const s = await api('/api/auth/status');
+    const bar = $('#authbar');
+    bar.hidden = false;
+    bar.classList.toggle('ok', s.signed_in);
+    bar.classList.toggle('warn', !s.redirect_ok || !s.has_client_secrets);
+    $('#signout').hidden = !s.signed_in;
+
+    if (s.signed_in) {
+      $('#authmsg').textContent = s.valid
+        ? 'Signed in to Google'
+        : 'Signed in; access will renew automatically';
+    } else if (!s.has_client_secrets) {
+      $('#authmsg').textContent = 'No credentials.json on the server yet';
+    } else if (!s.redirect_ok) {
+      // Google refuses plain http from anything but localhost, so signing in
+      // from the tablet over a LAN address cannot work. Say so plainly.
+      $('#authmsg').textContent = s.redirect_problem;
+    } else {
+      $('#authmsg').textContent = 'Not signed in';
+    }
+  } catch (e) {
+    $('#authbar').hidden = true;
+  }
+}
+
+$('#signout').addEventListener('click', async () => {
+  try {
+    await api('/api/auth/signout', {method: 'POST'});
+    loadAuth();
+  } catch (e) { showError(e.message); }
+});
+
+// The callback tab tells us when it is done.
+window.addEventListener('message', e => {
+  if (e.data === 'auth-changed') loadAuth();
+});
+
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+loadAuth();
 loadTriage();
 loadFiling();
 </script>
