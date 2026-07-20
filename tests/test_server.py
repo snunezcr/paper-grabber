@@ -1164,8 +1164,5 @@ def test_check_now_is_green_like_upload(client):
     assert "var(--accept)" in rule
 
 
-def test_interesting_uses_an_exclamation_not_a_tick(client):
-    body = client.get("/").text
-    assert "iconBtn('yes', 'bang'" in body
-    # A tick reads as "done"; this decision is "this matters".
-    assert "iconBtn('yes', 'check'" not in body
+def test_interesting_uses_a_tick(client):
+    assert "iconBtn('yes', 'check'" in client.get("/").text
