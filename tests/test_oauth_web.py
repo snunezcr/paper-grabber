@@ -279,3 +279,66 @@ def test_the_flag_is_cleared_even_if_the_exchange_raises():
         with _allow_loopback_http("http://localhost:8823/cb"):
             raise RuntimeError("token exchange failed")
     assert "OAUTHLIB_INSECURE_TRANSPORT" not in os.environ
+
+
+# --- PKCE ---------------------------------------------------------------------
+
+
+def test_authorization_url_carries_a_pkce_challenge(paths):
+    creds, token = paths
+    write_client_secrets(creds)
+    o = WebOAuth(credentials_path=creds, token_path=token)
+    url = o.start("http://localhost:8823" + CALLBACK_PATH)
+    assert "code_challenge=" in url
+    assert "code_challenge_method=S256" in url
+
+
+def test_verifier_is_stored_for_the_exchange(paths):
+    # The challenge goes to Google; the token exchange must present the
+    # original verifier. start() and finish() use different Flow objects, so
+    # losing it here is what produced "invalid_grant: Missing code verifier".
+    creds, token = paths
+    write_client_secrets(creds)
+    o = WebOAuth(credentials_path=creds, token_path=token)
+    url = o.start("http://localhost:8823" + CALLBACK_PATH)
+    state = dict(p.split("=", 1) for p in url.split("?", 1)[1].split("&"))["state"]
+    assert o._pending[state].code_verifier
+    assert len(o._pending[state].code_verifier) >= 43  # RFC 7636 minimum
+
+
+def test_verifier_is_applied_to_the_exchange_flow(paths, monkeypatch):
+    creds, token = paths
+    write_client_secrets(creds)
+    o = WebOAuth(credentials_path=creds, token_path=token)
+    url = o.start("http://localhost:8823" + CALLBACK_PATH)
+    state = dict(p.split("=", 1) for p in url.split("?", 1)[1].split("&"))["state"]
+    expected = o._pending[state].code_verifier
+
+    seen = {}
+    real_flow = o._flow
+
+    def spy(redirect_uri):
+        flow = real_flow(redirect_uri)
+
+        def fake_fetch(**kwargs):
+            seen["verifier"] = flow.code_verifier
+            raise RuntimeError("stop here")
+
+        flow.fetch_token = fake_fetch
+        return flow
+
+    monkeypatch.setattr(o, "_flow", spy)
+    with pytest.raises(OAuthError):
+        o.finish(state=state, full_url=f"http://localhost:8823{CALLBACK_PATH}?code=X&state={state}")
+
+    assert seen["verifier"] == expected
+
+
+def test_each_sign_in_gets_its_own_verifier(paths):
+    creds, token = paths
+    write_client_secrets(creds)
+    o = WebOAuth(credentials_path=creds, token_path=token)
+    o.start("http://localhost:8823" + CALLBACK_PATH)
+    o.start("http://localhost:8823" + CALLBACK_PATH)
+    verifiers = {p.code_verifier for p in o._pending.values()}
+    assert len(verifiers) == 2

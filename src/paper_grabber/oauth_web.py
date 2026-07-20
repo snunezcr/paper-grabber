@@ -48,6 +48,10 @@ class PendingSignIn:
     state: str
     redirect_uri: str
     created_at: float
+    # PKCE: authorization_url() generates this and sends only its hash to
+    # Google. The token exchange must present the original, so it has to
+    # survive between the two requests -- they use different Flow objects.
+    code_verifier: str | None = None
 
 
 class WebOAuth:
@@ -134,7 +138,10 @@ class WebOAuth:
             prompt="consent",
         )
         self._pending[state] = PendingSignIn(
-            state=state, redirect_uri=redirect_uri, created_at=time.time()
+            state=state,
+            redirect_uri=redirect_uri,
+            created_at=time.time(),
+            code_verifier=flow.code_verifier,
         )
         return auth_url
 
@@ -146,6 +153,9 @@ class WebOAuth:
             raise OAuthError("sign-in state not recognised; start again")
 
         flow = self._flow(pending.redirect_uri)
+        # Without this the exchange omits the verifier and Google answers
+        # "invalid_grant: Missing code verifier".
+        flow.code_verifier = pending.code_verifier
         try:
             with _allow_loopback_http(pending.redirect_uri):
                 flow.fetch_token(authorization_response=full_url)
