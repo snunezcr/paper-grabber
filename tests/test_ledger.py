@@ -99,8 +99,10 @@ def test_counts_by_decision(ledger):
     ledger.record(paper(title="C"))
     ledger.decide("A", Decision.ACCEPTED)
     ledger.decide("B", Decision.REJECTED)
-    # "filed" rides along with the decision counts; nothing is filed yet.
-    assert ledger.counts() == {"accepted": 1, "rejected": 1, "pending": 1, "filed": 0}
+    # "filed" and "processed" ride along with the decision counts.
+    assert ledger.counts() == {
+        "accepted": 1, "rejected": 1, "pending": 1, "filed": 0, "processed": 0,
+    }
 
 
 def test_unknown_paper_has_no_decision(ledger):
@@ -366,3 +368,62 @@ def test_staged_name_survives_a_title_change(ledger):
     ledger.set_staged(key, "2026 Original Title.pdf")
     ledger.attach_enrichment(key, {"title": "A Completely Revised Title"})
     assert ledger.get(key).staged_name == "2026 Original Title.pdf"
+
+
+# --- processed ----------------------------------------------------------------
+
+
+def test_uploaded_paper_moves_out_of_the_filing_queue(ledger):
+    # "Ready to upload" is meaningless if it also lists what is already there.
+    key = accepted_key(ledger)
+    ledger.set_destination(key, "F1", "Folder")
+    assert len(ledger.accepted(filed=True)) == 1
+
+    ledger.set_uploaded(key, "DRIVE1")
+    assert ledger.accepted(filed=True) == []
+    assert ledger.accepted() == []
+    assert [p.key for p in ledger.processed()] == [key]
+
+
+def test_processed_is_empty_before_any_upload(ledger):
+    accepted_key(ledger)
+    assert ledger.processed() == []
+
+
+def test_processed_counts_separately(ledger):
+    key = accepted_key(ledger)
+    ledger.set_destination(key, "F1", "Folder")
+    ledger.set_uploaded(key, "DRIVE1")
+    counts = ledger.counts()
+    assert counts["processed"] == 1
+    assert counts["filed"] == 0
+
+
+def test_processed_is_newest_first(ledger):
+    import time
+
+    for t in ("first", "second"):
+        ledger.record(paper(title=t))
+        ledger.decide(t, Decision.ACCEPTED)
+    keys = {p.title: p.key for p in ledger.accepted()}
+    ledger.set_uploaded(keys["first"], "D1")
+    time.sleep(0.01)
+    ledger.set_uploaded(keys["second"], "D2")
+    assert [p.title for p in ledger.processed()] == ["second", "first"]
+
+
+def test_processed_paper_exposes_a_drive_link(ledger):
+    from paper_grabber.ledger import paper_view
+
+    key = accepted_key(ledger)
+    ledger.set_uploaded(key, "ABC123")
+    view = paper_view(ledger.processed()[0])
+    assert view["drive_url"] == "https://drive.google.com/file/d/ABC123/view"
+    assert view["uploaded"] is True
+
+
+def test_unprocessed_paper_has_no_drive_link(ledger):
+    from paper_grabber.ledger import paper_view
+
+    accepted_key(ledger)
+    assert paper_view(ledger.accepted()[0])["drive_url"] is None

@@ -421,3 +421,66 @@ def test_page_checks_the_server_version(client):
     body = client.get("/").text
     assert "checkServerVersion" in body
     assert "older code" in body
+
+
+# --- processed tab ------------------------------------------------------------
+
+
+def upload_one(seeded, key, folder="Quantum"):
+    with Ledger(seeded) as led:
+        led.set_destination(key, "F1", folder)
+        led.set_uploaded(key, "DRIVE-ABC")
+
+
+def test_processed_starts_empty(app_client):
+    assert app_client.get("/api/processed").json()["papers"] == []
+
+
+def test_uploaded_paper_appears_in_processed(app_client, seeded):
+    accept_all(app_client)
+    key = app_client.get("/api/accepted").json()["unfiled"][0]["key"]
+    upload_one(seeded, key)
+    papers = app_client.get("/api/processed").json()["papers"]
+    assert len(papers) == 1
+    assert papers[0]["uploaded"] is True
+
+
+def test_uploaded_paper_leaves_the_filing_lists(app_client, seeded):
+    # The whole point of the separation: "ready to upload" must not include
+    # what is already uploaded.
+    accept_all(app_client)
+    key = app_client.get("/api/accepted").json()["unfiled"][0]["key"]
+    upload_one(seeded, key)
+    acc = app_client.get("/api/accepted").json()
+    assert all(p["key"] != key for p in acc["filed"])
+    assert all(p["key"] != key for p in acc["unfiled"])
+
+
+def test_processed_paper_has_a_drive_link(app_client, seeded):
+    accept_all(app_client)
+    key = app_client.get("/api/accepted").json()["unfiled"][0]["key"]
+    upload_one(seeded, key)
+    p = app_client.get("/api/processed").json()["papers"][0]
+    assert p["drive_url"] == "https://drive.google.com/file/d/DRIVE-ABC/view"
+    assert p["dest_folder_name"] == "Quantum"
+
+
+def test_counts_separate_filed_from_processed(app_client, seeded):
+    accept_all(app_client)
+    keys = [p["key"] for p in app_client.get("/api/accepted").json()["unfiled"]]
+    app_client.post("/api/destination",
+                    json={"keys": [keys[0]], "folder_id": "F1", "folder_name": "Quantum"})
+    upload_one(seeded, keys[1])
+    counts = app_client.get("/api/processed").json()["counts"]
+    assert counts["filed"] == 1
+    assert counts["processed"] == 1
+
+
+def test_page_has_the_processed_tab(app_client):
+    body = app_client.get("/").text
+    assert 'id="tab-processed"' in body
+    assert 'id="view-processed"' in body
+
+
+def test_processed_is_an_advertised_capability(app_client):
+    assert "processed" in app_client.get("/api/version").json()["capabilities"]

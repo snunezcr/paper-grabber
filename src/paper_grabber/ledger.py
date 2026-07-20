@@ -114,6 +114,13 @@ def paper_view(p: LedgerPaper) -> dict[str, Any]:
         "dest_folder_name": p.dest_folder_name,
         "staged": p.staged_name is not None,
         "uploaded": p.drive_file_id is not None,
+        "uploaded_at": p.uploaded_at,
+        # Opens the PDF in Drive, which is where reading and annotation happen.
+        "drive_url": (
+            f"https://drive.google.com/file/d/{p.drive_file_id}/view"
+            if p.drive_file_id
+            else None
+        ),
     }
 
 
@@ -246,18 +253,36 @@ class Ledger:
         return cur.rowcount > 0
 
     def accepted(self, *, filed: bool | None = None) -> list[LedgerPaper]:
-        """Accepted papers, optionally split by whether a destination is set.
+        """Accepted papers that are not yet in Drive.
 
-        `filed=False` is the filing queue; `filed=True` is what upload will act
-        on.
+        Papers already uploaded are excluded entirely: they belong to the
+        processed list, not the filing queue, and showing them in both makes
+        "ready to upload" meaningless.
+
+        `filed=False` is the queue awaiting a destination; `filed=True` is what
+        upload will act on.
         """
-        sql = ("SELECT key, title, payload, decision, first_seen, decided_at, dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at FROM papers WHERE decision = ?")
+        sql = (
+            "SELECT key, title, payload, decision, first_seen, decided_at,"
+            " dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at"
+            " FROM papers WHERE decision = ? AND drive_file_id IS NULL"
+        )
         if filed is True:
             sql += " AND dest_folder_id IS NOT NULL"
         elif filed is False:
             sql += " AND dest_folder_id IS NULL"
         sql += " ORDER BY decided_at"
         rows = self._db.execute(sql, (Decision.ACCEPTED.value,)).fetchall()
+        return [self._row(r) for r in rows]
+
+    def processed(self) -> list[LedgerPaper]:
+        """Papers safely in Drive, most recent first."""
+        rows = self._db.execute(
+            "SELECT key, title, payload, decision, first_seen, decided_at,"
+            " dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at"
+            " FROM papers WHERE drive_file_id IS NOT NULL"
+            " ORDER BY uploaded_at DESC",
+        ).fetchall()
         return [self._row(r) for r in rows]
 
     # --- fetch and upload progress ---------------------------------------------
@@ -343,8 +368,12 @@ class Ledger:
         ).fetchall()
         counts = {d: n for d, n in rows}
         counts["filed"] = self._db.execute(
-            "SELECT COUNT(*) FROM papers WHERE decision = ? AND dest_folder_id IS NOT NULL",
+            "SELECT COUNT(*) FROM papers WHERE decision = ? AND dest_folder_id IS NOT NULL"
+            " AND drive_file_id IS NULL",
             (Decision.ACCEPTED.value,),
+        ).fetchone()[0]
+        counts["processed"] = self._db.execute(
+            "SELECT COUNT(*) FROM papers WHERE drive_file_id IS NOT NULL"
         ).fetchone()[0]
         return counts
 

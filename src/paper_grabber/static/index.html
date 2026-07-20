@@ -205,6 +205,7 @@
   <nav>
     <button id="tab-triage" aria-selected="true">Triage<span class="badge" id="badge-triage">0</span></button>
     <button id="tab-filing" aria-selected="false">Filing<span class="badge" id="badge-filing">0</span></button>
+    <button id="tab-processed" aria-selected="false">Processed<span class="badge" id="badge-processed">0</span></button>
   </nav>
 </header>
 
@@ -217,6 +218,11 @@
     <div id="empty" hidden>Nothing to triage. Run <code>paper-grabber sync</code>.</div>
   </section>
 
+  <section id="view-processed" hidden>
+    <div id="processed"></div>
+    <div id="noprocessed" class="note" hidden>Nothing uploaded yet. Papers you send to Drive appear here.</div>
+  </section>
+
   <section id="view-filing" hidden>
     <div class="filing-head">
       <span class="basefolder" id="basefolder">No base folder set</span>
@@ -225,7 +231,7 @@
     <div id="unfiled"></div>
     <div id="nofiling" class="note" hidden>Nothing accepted yet. Papers you mark interesting appear here.</div>
     <div id="filed-wrap" hidden>
-      <div class="section-label">Filed, ready to upload</div>
+      <div class="section-label">Ready to upload</div>
       <div id="filed"></div>
     </div>
   </section>
@@ -260,7 +266,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
 let state = { tab: 'triage', selected: new Set(), base: null, sheet: null };
 
 // Capabilities this page expects the server to have.
-const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse'];
+const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed'];
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -305,8 +311,10 @@ function showError(msg) {
 function showCounts(c) {
   $('#counts').textContent =
     `${c.pending || 0} pending · ${c.accepted || 0} accepted · ` +
-    `${c.rejected || 0} rejected · ${c.filed || 0} filed`;
+    `${c.rejected || 0} rejected · ${c.filed || 0} filed · ` +
+    `${c.processed || 0} in Drive`;
   $('#badge-triage').textContent = c.pending || 0;
+  $('#badge-processed').textContent = c.processed || 0;
 }
 
 // ---------- triage ----------
@@ -506,6 +514,7 @@ async function pollUpload() {
     // Re-render, then paint any failure onto the card it belongs to so the
     // reason survives the refresh.
     await loadFiling();
+    loadProcessed();
     paintUploadFailures();
   } catch (e) {
     state.uploading = null;
@@ -527,6 +536,30 @@ function refreshFileBar() {
   $('#selcount').textContent = `${n} selected`;
   $('#filesel').disabled = n === 0;
   $('#filebar').hidden = !(state.tab === 'filing' && $('#unfiled').children.length);
+}
+
+function processedCard(p) {
+  const el = document.createElement('article');
+  el.className = 'card';
+  el.dataset.key = p.key;
+  el.innerHTML = cardBody(p) + `
+    <div class="actions filed-actions">
+      ${p.drive_url
+        ? `<a class="open" href="${esc(p.drive_url)}" target="_blank" rel="noopener">Open in Drive</a>`
+        : ''}
+      <span class="done">${p.dest_folder_name ? '→ ' + esc(p.dest_folder_name) : 'In Drive'}</span>
+    </div>`;
+  wireAbstract(el);
+  return el;
+}
+
+async function loadProcessed() {
+  try {
+    const data = await api('/api/processed');
+    showCounts(data.counts);
+    $('#processed').replaceChildren(...data.papers.map(processedCard));
+    $('#noprocessed').hidden = data.papers.length > 0;
+  } catch (e) { showError(`Could not load processed papers: ${e.message}`); }
 }
 
 async function loadFiling() {
@@ -655,17 +688,19 @@ $('#sheetok').addEventListener('click', async () => {
 
 function selectTab(tab) {
   state.tab = tab;
-  $('#tab-triage').setAttribute('aria-selected', tab === 'triage');
-  $('#tab-filing').setAttribute('aria-selected', tab === 'filing');
-  $('#view-triage').hidden = tab !== 'triage';
-  $('#view-filing').hidden = tab !== 'filing';
+  for (const name of ['triage', 'filing', 'processed']) {
+    $(`#tab-${name}`).setAttribute('aria-selected', tab === name);
+    $(`#view-${name}`).hidden = tab !== name;
+  }
   $('#undo').hidden = tab !== 'triage' || !state.lastUndo;
   refreshFileBar();
   if (tab === 'filing') loadFiling();
+  if (tab === 'processed') loadProcessed();
 }
 
 $('#tab-triage').addEventListener('click', () => selectTab('triage'));
 $('#tab-filing').addEventListener('click', () => selectTab('filing'));
+$('#tab-processed').addEventListener('click', () => selectTab('processed'));
 
 // ---------- sign-in ----------
 
@@ -792,6 +827,7 @@ resumeRefreshIfRunning();
 loadAuth();
 loadTriage();
 loadFiling();
+loadProcessed();
 </script>
 </body>
 </html>

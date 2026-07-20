@@ -199,6 +199,15 @@ def create_app(
                 },
             }
 
+    @app.get("/api/processed")
+    def processed() -> dict[str, Any]:
+        """Papers already in Drive."""
+        with open_ledger() as led:
+            return {
+                "papers": [paper_view(p) for p in led.processed()],
+                "counts": led.counts(),
+            }
+
     @app.post("/api/papers/{key}/unfile")
     def unfile(key: str) -> dict[str, Any]:
         """Return a filed paper to the queue by clearing its destination."""
@@ -348,6 +357,7 @@ def create_app(
                     "upload",
                     "unfile",
                     "drive-browse",
+                    "processed",
                 }
             ),
         }
