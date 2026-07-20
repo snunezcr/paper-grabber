@@ -1043,3 +1043,59 @@ def test_rejected_button_has_no_count(client):
     bar = body.split('<div class="titlebar">')[1].split("</div>")[0]
     assert "badge-rejected" not in bar
     assert ">Rejected</button>" in bar
+
+
+# --- notes --------------------------------------------------------------------
+
+
+def test_note_is_saved_and_returned(app_client, seeded):
+    accept_all(app_client)
+    key = app_client.get("/api/accepted").json()["unfiled"][0]["key"]
+    r = app_client.put(f"/api/papers/{key}/note", json={"note": "Read section 4."})
+    assert r.status_code == 200
+    assert r.json()["note"] == "Read section 4."
+
+    p = next(x for x in app_client.get("/api/accepted").json()["unfiled"]
+             if x["key"] == key)
+    assert p["note"] == "Read section 4."
+
+
+def test_note_is_trimmed_and_emptied(app_client, seeded):
+    accept_all(app_client)
+    key = app_client.get("/api/accepted").json()["unfiled"][0]["key"]
+    app_client.put(f"/api/papers/{key}/note", json={"note": "  spaced  "})
+    assert app_client.get("/api/accepted").json()["unfiled"][0]["note"] == "spaced"
+    app_client.put(f"/api/papers/{key}/note", json={"note": "   "})
+    assert app_client.get("/api/accepted").json()["unfiled"][0]["note"] is None
+
+
+def test_note_on_an_uploaded_paper_is_refused(app_client, seeded):
+    # Its description in Drive is already written; editing here would leave
+    # the two disagreeing with no way to tell which is current.
+    accept_all(app_client)
+    key = app_client.get("/api/accepted").json()["unfiled"][0]["key"]
+    with Ledger(seeded) as led:
+        led.set_destination(key, "F1", "Quantum")
+        led.set_uploaded(key, "DRIVE1")
+    assert app_client.put(f"/api/papers/{key}/note",
+                          json={"note": "too late"}).status_code == 409
+
+
+def test_note_for_an_unknown_paper_is_404(app_client):
+    assert app_client.put("/api/papers/nope/note", json={"note": "x"}).status_code == 404
+
+
+def test_note_button_is_on_filing_cards(client):
+    body = client.get("/").text
+    filing = body.split("function filingCard")[1].split("\nasync function")[0]
+    assert 'class="note"' in filing
+    assert "editNote" in body
+
+
+def test_note_is_shown_on_the_card(client):
+    assert 'class="note-text"' in client.get("/").text
+
+
+def test_note_editor_says_when_it_reaches_drive(client):
+    body = client.get("/").text
+    assert "written to the file's description in Drive when it is uploaded" in body

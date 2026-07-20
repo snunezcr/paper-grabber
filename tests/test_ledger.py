@@ -427,3 +427,62 @@ def test_unprocessed_paper_has_no_drive_link(ledger):
 
     accepted_key(ledger)
     assert paper_view(ledger.accepted()[0])["drive_url"] is None
+
+
+# --- notes --------------------------------------------------------------------
+
+
+def test_note_roundtrip(ledger):
+    ledger.record(paper())
+    key = ledger.pending()[0].key
+    assert ledger.set_note(key, "Read section 4.")
+    assert ledger.get(key).note == "Read section 4."
+
+
+def test_note_is_trimmed(ledger):
+    ledger.record(paper())
+    key = ledger.pending()[0].key
+    ledger.set_note(key, "   spaced   ")
+    assert ledger.get(key).note == "spaced"
+
+
+def test_blank_note_clears_it(ledger):
+    ledger.record(paper())
+    key = ledger.pending()[0].key
+    ledger.set_note(key, "something")
+    ledger.set_note(key, "   ")
+    assert ledger.get(key).note is None
+
+
+def test_note_for_an_unknown_key_is_reported(ledger):
+    assert ledger.set_note("nope", "x") is False
+
+
+def test_every_query_returns_the_same_columns(ledger):
+    """Guards against column drift.
+
+    Adding `note` initially updated four of the seven paper queries; the
+    others silently returned rows one column short, so notes saved fine and
+    were invisible everywhere they were read back.
+    """
+    ledger.record(paper(title="Everywhere"))
+    key = ledger.pending()[0].key
+    ledger.set_note(key, "visible everywhere")
+
+    assert ledger.get(key).note == "visible everywhere"
+    assert ledger.pending()[0].note == "visible everywhere"
+
+    ledger.decide("Everywhere", Decision.ACCEPTED)
+    assert ledger.accepted()[0].note == "visible everywhere"
+    assert ledger.awaiting_download()[0].note == "visible everywhere"
+
+    ledger.set_destination(key, "F1", "Folder")
+    assert ledger.accepted(filed=True)[0].note == "visible everywhere"
+    ledger.set_staged(key, "a.pdf")
+    assert ledger.awaiting_upload()[0].note == "visible everywhere"
+
+    ledger.set_uploaded(key, "DRIVE1")
+    assert ledger.processed()[0].note == "visible everywhere"
+
+    ledger.decide("Everywhere", Decision.REJECTED)
+    assert ledger.rejected()[0].note == "visible everywhere"

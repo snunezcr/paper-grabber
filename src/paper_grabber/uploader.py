@@ -159,7 +159,14 @@ def make_upload_job(
 
                     path = staging.path_for(name)
                     try:
-                        remote = drive.upload(path, folder_id=entry.dest_folder_id)
+                        # The note becomes permanent here: until now it has
+                        # lived only in the ledger, because the file it
+                        # describes did not exist in Drive yet.
+                        remote = drive.upload(
+                            path,
+                            folder_id=entry.dest_folder_id,
+                            description=entry.note or None,
+                        )
                         staging.confirm(path, remote)
                         ledger.set_uploaded(key, remote.file_id)
                         result.uploaded += 1

@@ -63,6 +63,7 @@ ALTER TABLE papers ADD COLUMN dest_folder_name TEXT;
 ALTER TABLE papers ADD COLUMN staged_name TEXT;
 ALTER TABLE papers ADD COLUMN drive_file_id TEXT;
 ALTER TABLE papers ADD COLUMN uploaded_at REAL;
+ALTER TABLE papers ADD COLUMN note TEXT;
 """
 
 SETTING_BASE_FOLDER_ID = "base_folder_id"
@@ -84,6 +85,7 @@ class LedgerPaper:
     staged_name: str | None = None
     drive_file_id: str | None = None
     uploaded_at: float | None = None
+    note: str | None = None
 
 
 def paper_view(p: LedgerPaper) -> dict[str, Any]:
@@ -124,6 +126,7 @@ def paper_view(p: LedgerPaper) -> dict[str, Any]:
         "doi": e.get("doi"),
         "dest_folder_id": p.dest_folder_id,
         "dest_folder_name": p.dest_folder_name,
+        "note": p.note,
         "staged": p.staged_name is not None,
         "uploaded": p.drive_file_id is not None,
         "uploaded_at": p.uploaded_at,
@@ -269,6 +272,20 @@ class Ledger:
         self._db.commit()
         return cur.rowcount > 0
 
+    def set_note(self, key: str, note: str | None) -> bool:
+        """Attach a note to a paper, or clear it with an empty string.
+
+        Held here rather than sent to Drive immediately: a note is written
+        while filing, and the file it belongs to does not exist in Drive until
+        the upload happens.
+        """
+        text = (note or "").strip() or None
+        cur = self._db.execute(
+            "UPDATE papers SET note = ? WHERE key = ?", (text, key)
+        )
+        self._db.commit()
+        return cur.rowcount > 0
+
     def set_destination(self, key: str, folder_id: str, folder_name: str) -> bool:
         """Choose where an accepted paper will be filed."""
         cur = self._db.execute(
@@ -290,7 +307,7 @@ class Ledger:
         """
         sql = (
             "SELECT key, title, payload, decision, first_seen, decided_at,"
-            " dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at"
+            " dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note"
             " FROM papers WHERE decision = ? AND drive_file_id IS NULL"
         )
         if filed is True:
@@ -305,7 +322,7 @@ class Ledger:
         """Rejected papers, most recently rejected first."""
         rows = self._db.execute(
             "SELECT key, title, payload, decision, first_seen, decided_at,"
-            " dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at"
+            " dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note"
             " FROM papers WHERE decision = ? ORDER BY decided_at DESC",
             (Decision.REJECTED.value,),
         ).fetchall()
@@ -315,7 +332,7 @@ class Ledger:
         """Papers safely in Drive, most recent first."""
         rows = self._db.execute(
             "SELECT key, title, payload, decision, first_seen, decided_at,"
-            " dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at"
+            " dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note"
             " FROM papers WHERE drive_file_id IS NOT NULL"
             " ORDER BY uploaded_at DESC",
         ).fetchall()
@@ -363,7 +380,7 @@ class Ledger:
     def awaiting_download(self) -> list[LedgerPaper]:
         """Accepted papers not yet staged and not already in Drive."""
         rows = self._db.execute(
-            f"SELECT key, title, payload, decision, first_seen, decided_at, dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at FROM papers"
+            f"SELECT key, title, payload, decision, first_seen, decided_at, dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note FROM papers"
             " WHERE decision = ? AND staged_name IS NULL AND drive_file_id IS NULL"
             " ORDER BY decided_at",
             (Decision.ACCEPTED.value,),
@@ -373,7 +390,7 @@ class Ledger:
     def awaiting_upload(self) -> list[LedgerPaper]:
         """Staged papers with a destination chosen, ready to send."""
         rows = self._db.execute(
-            f"SELECT key, title, payload, decision, first_seen, decided_at, dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at FROM papers"
+            f"SELECT key, title, payload, decision, first_seen, decided_at, dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note FROM papers"
             " WHERE decision = ? AND staged_name IS NOT NULL"
             " AND dest_folder_id IS NOT NULL AND drive_file_id IS NULL"
             " ORDER BY decided_at",
@@ -383,7 +400,7 @@ class Ledger:
 
     def get(self, key: str) -> LedgerPaper | None:
         row = self._db.execute(
-            "SELECT key, title, payload, decision, first_seen, decided_at, dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at"
+            "SELECT key, title, payload, decision, first_seen, decided_at, dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note"
             " FROM papers WHERE key = ?",
             (key,),
         ).fetchone()
@@ -401,7 +418,7 @@ class Ledger:
     def pending(self) -> list[LedgerPaper]:
         """Papers awaiting a decision, oldest first."""
         rows = self._db.execute(
-            "SELECT key, title, payload, decision, first_seen, decided_at, dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at"
+            "SELECT key, title, payload, decision, first_seen, decided_at, dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note"
             " FROM papers WHERE decision = ? ORDER BY first_seen",
             (Decision.PENDING.value,),
         ).fetchall()
@@ -441,6 +458,7 @@ class Ledger:
             staged_name=r[8] if len(r) > 8 else None,
             drive_file_id=r[9] if len(r) > 9 else None,
             uploaded_at=r[10] if len(r) > 10 else None,
+            note=r[11] if len(r) > 11 else None,
         )
 
     def close(self) -> None:

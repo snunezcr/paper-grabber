@@ -19,12 +19,14 @@ class FakeDriveUpload:
         self.md5 = md5
         self.error = error
         self.uploads = []
+        self.descriptions = []
 
-    def upload(self, path, *, folder_id, name=None):
+    def upload(self, path, *, folder_id, name=None, description=None):
         if self.error:
             raise self.error
         data = path.read_bytes()
         self.uploads.append((path.name, folder_id))
+        self.descriptions.append(description)
         return RemoteFile(
             file_id="DRIVE1",
             size=len(data),
@@ -247,3 +249,34 @@ def test_filed_cards_have_both_buttons(seeded):
     db, _, staging = seeded
     body = TestClient(create_app(db, staging_path=staging)).get("/").text
     assert 'class="up"' in body and 'class="unfile"' in body
+
+
+# --- notes reach Drive at upload time -----------------------------------------
+
+
+def test_note_becomes_the_drive_description(seeded, monkeypatch):
+    db, key, staging = seeded
+    with Ledger(db) as led:
+        led.set_note(key, "Compare with Plaquette.")
+    drive = FakeDriveUpload()
+    run_job(db, key, staging, drive, monkeypatch)
+    assert drive.descriptions == ["Compare with Plaquette."]
+
+
+def test_no_note_sends_no_description(seeded, monkeypatch):
+    db, key, staging = seeded
+    drive = FakeDriveUpload()
+    run_job(db, key, staging, drive, monkeypatch)
+    assert drive.descriptions == [None]
+
+
+def test_note_survives_until_upload(seeded, monkeypatch):
+    # The whole point: it lives in the ledger until the file exists in Drive.
+    db, key, staging = seeded
+    with Ledger(db) as led:
+        led.set_note(key, "Read section 4.")
+        assert led.get(key).note == "Read section 4."
+        assert led.get(key).drive_file_id is None
+    run_job(db, key, staging, FakeDriveUpload(), monkeypatch)
+    with Ledger(db) as led:
+        assert led.get(key).drive_file_id == "DRIVE1"

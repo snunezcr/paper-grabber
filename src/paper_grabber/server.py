@@ -74,6 +74,10 @@ class UploadIn(BaseModel):
     keys: list[str]
 
 
+class NoteIn(BaseModel):
+    note: str
+
+
 class BulkDecisionIn(BaseModel):
     keys: list[str]
     decision: Decision
@@ -209,6 +213,21 @@ def create_app(
                     "folder_name": led.get_setting(SETTING_BASE_FOLDER_NAME),
                 },
             }
+
+    @app.put("/api/papers/{key}/note")
+    def set_note(key: str, body: NoteIn) -> dict[str, Any]:
+        """Save a note. It reaches Drive only when the paper is uploaded."""
+        with open_ledger() as led:
+            paper = led.get(key)
+            if paper is None:
+                raise HTTPException(status_code=404, detail="no such paper")
+            if paper.drive_file_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="already in Drive; its description is fixed",
+                )
+            led.set_note(key, body.note)
+            return {"key": key, "note": led.get(key).note}
 
     @app.post("/api/decisions")
     def bulk_decision(body: BulkDecisionIn) -> dict[str, Any]:
@@ -512,6 +531,7 @@ def create_app(
                     "suggestions",
                     "bulk-decision",
                     "rejected",
+                    "notes",
                 }
             ),
         }

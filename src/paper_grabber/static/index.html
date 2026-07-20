@@ -322,6 +322,25 @@
   #sheetfoot .newf { flex: 0 0 auto; padding: 0 1rem; border: 1px solid var(--line); background: none; color: var(--accent); }
   #sheetfoot .confirm { flex: 1; border: 1px solid var(--accent); background: var(--accent); color: #fff; }
 
+  #notebox {
+    position: fixed; inset: 0; z-index: 25; display: grid; place-items: center;
+    background: rgba(0,0,0,.45); padding: 1.2rem;
+  }
+  #notetitle { font-weight: 600; color: var(--ink); }
+  #notetext {
+    width: 100%; font: 15px/1.5 system-ui, sans-serif; padding: .6rem;
+    background: var(--bg); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 8px; resize: vertical;
+  }
+  .notehint { margin: .5rem 0 0; font-size: .82rem; color: var(--muted); }
+  .noteactions { display: flex; gap: .6rem; justify-content: flex-end; margin-top: .7rem; }
+  .noteactions button {
+    min-height: 44px; padding: 0 1.1rem; cursor: pointer; font-weight: 600;
+    border-radius: 10px; border: 1px solid var(--accent);
+    background: var(--accent); color: #fff;
+  }
+  .noteactions .ghostbtn { background: none; color: var(--ink); border-color: var(--line); }
+
   #citebox {
     position: fixed; inset: 0; z-index: 25; display: grid; place-items: center;
     background: rgba(0,0,0,.45); padding: 1.2rem;
@@ -343,6 +362,12 @@
   }
   /* Pinned right: it is the one control that is never the primary action
      on any of these cards, so it should not sit where the eye lands first. */
+  .note-text {
+    margin: .5rem 0 .1rem; padding: .5rem .6rem; font-size: .89rem;
+    border-left: 3px solid var(--accent); background: var(--bg);
+    border-radius: 0 8px 8px 0; white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .filed-actions .note { flex: 0 0 auto; padding: 0 .9rem; }
   .filed-actions .cite { flex: 0 0 auto; padding: 0 .9rem; margin-left: auto; }
   .filed-actions .suggest {
     flex: 0 0 auto; padding: 0 .9rem; font-size: .87rem;
@@ -464,6 +489,18 @@
 
 <button id="undo" hidden>Undo</button>
 
+<div id="notebox" hidden>
+  <div class="citepanel">
+    <p id="notetitle"></p>
+    <textarea id="notetext" rows="7" placeholder="Why this paper matters, what to read first…"></textarea>
+    <p class="notehint">Saved here now; written to the file's description in Drive when it is uploaded.</p>
+    <div class="noteactions">
+      <button id="notecancel" class="ghostbtn">Cancel</button>
+      <button id="notesave">Save</button>
+    </div>
+  </div>
+</div>
+
 <div id="citebox" hidden>
   <div class="citepanel">
     <p>Copying was blocked. Select and copy this:</p>
@@ -492,10 +529,10 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
 
 let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               pending: [], alerts: new Set(), knownAlerts: new Set(),
-              query: '', suggestions: {} };
+              query: '', suggestions: {}, notePaper: null };
 
 // Capabilities this page expects the server to have.
-const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected'];
+const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes'];
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -577,6 +614,7 @@ function cardBody(p) {
     <p class="abstract clamped">${esc(p.abstract || 'No abstract or snippet available.')}</p>
     <button class="more" hidden>Show more</button>
     ${cardLinks(p)}
+    ${p.note ? `<div class="note-text">${esc(p.note)}</div>` : ''}
     <div class="tags">${tags.join('')}</div>`;
 }
 
@@ -844,8 +882,10 @@ function filingCard(p, {selectable}) {
     const hint = state.suggestions?.[p.key];
     actions.innerHTML = `
       ${hint ? `<button class="suggest" title="${esc(hint.reason)}">File to ${esc(hint.folder_name)}</button>` : ''}
+      <button class="note">${p.note ? 'Note ✓' : 'Note'}</button>
       <span class="cardstatus" hidden></span>
       <button class="cite">Cite</button>`;
+    actions.querySelector('.note').addEventListener('click', () => editNote(p));
     if (hint) {
       actions.querySelector('.suggest')
         .addEventListener('click', () => acceptSuggestion(p, hint, el));
@@ -867,8 +907,10 @@ function filingCard(p, {selectable}) {
       actions.innerHTML = `
         <button class="up">Upload</button>
         <button class="unfile">Not yet</button>
+        <button class="note">${p.note ? 'Note ✓' : 'Note'}</button>
         <span class="cardstatus" hidden></span>
         <button class="cite">Cite</button>`;
+      actions.querySelector('.note').addEventListener('click', () => editNote(p));
       actions.querySelector('.up').addEventListener('click', () => uploadOne(p, el));
       actions.querySelector('.unfile').addEventListener('click', () => unfile(p));
       actions.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
@@ -877,6 +919,47 @@ function filingCard(p, {selectable}) {
   }
   return el;
 }
+
+function editNote(paper) {
+  state.notePaper = paper;
+  $('#notetitle').textContent = paper.title;
+  $('#notetext').value = paper.note || '';
+  $('#notebox').hidden = false;
+  $('#notetext').focus();
+}
+
+function closeNote() {
+  $('#notebox').hidden = true;
+  state.notePaper = null;
+}
+
+$('#notecancel').addEventListener('click', closeNote);
+$('#notebox').addEventListener('click', e => {
+  if (e.target === $('#notebox')) closeNote();
+});
+
+$('#notesave').addEventListener('click', async () => {
+  const paper = state.notePaper;
+  if (!paper) return;
+  const button = $('#notesave');
+  button.disabled = true;
+  try {
+    await api(`/api/papers/${encodeURIComponent(paper.key)}/note`, {
+      method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({note: $('#notetext').value})
+    });
+    closeNote();
+    loadFiling();
+  } catch (e) {
+    showError(`Could not save the note: ${e.message}`);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !$('#notebox').hidden) closeNote();
+});
 
 async function copyToClipboard(text) {
   // navigator.clipboard requires a secure context. A plain-HTTP LAN address

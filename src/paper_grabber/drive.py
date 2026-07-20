@@ -170,8 +170,20 @@ class DriveClient:
 
     # --- upload ---------------------------------------------------------------
 
-    def upload(self, path: Path, *, folder_id: str, name: str | None = None) -> RemoteFile:
-        """Upload one file and return what Drive says it stored."""
+    def upload(
+        self,
+        path: Path,
+        *,
+        folder_id: str,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> RemoteFile:
+        """Upload one file and return what Drive says it stored.
+
+        `description` becomes Drive's own description field, which is where a
+        note written during filing ends up: visible in Drive's details pane
+        and searchable there, rather than living only in this app.
+        """
         path = Path(path)
         if not path.exists():
             raise DriveError(f"{path} does not exist")
@@ -182,7 +194,9 @@ class DriveClient:
             mimetype=PDF_MIME,
             resumable=size >= RESUMABLE_THRESHOLD,
         )
-        metadata = {"name": name or path.name, "parents": [folder_id]}
+        metadata: dict[str, Any] = {"name": name or path.name, "parents": [folder_id]}
+        if description:
+            metadata["description"] = description
 
         try:
             request = self._service.files().create(
