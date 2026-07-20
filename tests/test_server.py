@@ -577,7 +577,7 @@ def test_counts_move_from_processed_to_filed(seeded):
 
 
 def test_processed_cards_have_a_check_button(app_client):
-    assert 'class="verify"' in app_client.get("/").text
+    assert "iconBtn('verify'" in app_client.get("/").text
 
 
 def test_drive_only_token_does_not_use_gmail(tmp_path, monkeypatch):
@@ -825,9 +825,9 @@ def test_cite_button_is_on_every_filing_and_processed_card(client):
 
     # A card awaiting a destination still deserves a citation: wanting the
     # reference has nothing to do with having decided where the PDF goes.
-    assert "cite" in selectable
-    assert "cite" in ready
-    assert "cite" in processed
+    assert "iconBtn('cite'" in selectable
+    assert "iconBtn('cite'" in ready
+    assert "iconBtn('cite'" in processed
 
 
 def test_triage_cards_have_no_cite_button(client):
@@ -862,19 +862,19 @@ def test_cite_comes_last_in_every_action_row(client):
     for name in ("filingCard", "processedCard"):
         block = body.split(f"function {name}")[1].split("\nasync function")[0]
         for seg in block.split("innerHTML"):
-            if 'class="cite"' in seg and "cardstatus" in seg:
-                assert seg.index('class="cite"') > seg.index("cardstatus")
+            if "iconBtn('cite'" in seg and "cardstatus" in seg:
+                assert seg.index("iconBtn('cite'") > seg.index("cardstatus")
 
 
 def test_note_sits_immediately_before_cite(client):
     body = client.get("/").text
     filing = body.split("function filingCard")[1].split("\nasync function")[0]
-    rows = [seg for seg in filing.split("innerHTML") if 'class="note"' in seg]
+    rows = [seg for seg in filing.split("innerHTML") if "iconBtn('note" in seg]
     assert rows, "no filing row offers a note"
     for seg in rows:
         # Adjacent and both to the right of the status, so they read as a pair.
-        assert seg.index('class="note"') < seg.index('class="cite"')
-        assert seg.index("cardstatus") < seg.index('class="note"')
+        assert seg.index("iconBtn('note") < seg.index("iconBtn('cite'")
+        assert seg.index("cardstatus") < seg.index("iconBtn('note")
 
 
 def test_note_and_cite_are_pushed_right_as_a_pair(client):
@@ -1043,7 +1043,7 @@ def test_rejected_button_uses_the_palette_reject_colour(client):
 def test_rejected_view_and_recover_button_exist(client):
     body = client.get("/").text
     assert 'id="view-rejected"' in body
-    assert 'class="recover"' in body
+    assert "iconBtn('recover'" in body
     assert "recoverOne" in body
 
 
@@ -1058,7 +1058,8 @@ def test_rejected_button_has_no_count(client):
     body = client.get("/").text
     bar = body.split('<div class="titlebar">')[1].split("</div>")[0]
     assert "badge-rejected" not in bar
-    assert ">Rejected</button>" in bar
+    # The label lives in aria-label and the tooltip now that it is an icon.
+    assert 'aria-label="Rejected"' in bar
 
 
 # --- notes --------------------------------------------------------------------
@@ -1104,7 +1105,7 @@ def test_note_for_an_unknown_paper_is_404(app_client):
 def test_note_button_is_on_filing_cards(client):
     body = client.get("/").text
     filing = body.split("function filingCard")[1].split("\nasync function")[0]
-    assert 'class="note"' in filing
+    assert "iconBtn('note" in filing
     assert "editNote" in body
 
 
@@ -1114,4 +1115,57 @@ def test_note_is_shown_on_the_card(client):
 
 def test_note_editor_says_when_it_reaches_drive(client):
     body = client.get("/").text
-    assert "written to the file's description in Drive when it is uploaded" in body
+    assert "description in Drive when it is uploaded" in body
+
+
+def test_note_editor_is_a_right_hand_drawer(client):
+    # The card being annotated stays visible while the note is written.
+    body = client.get("/").text
+    assert 'id="notepanel"' in body
+    rule = body.split("#notepanel {")[1].split("}")[0]
+    assert "right: 0" in rule
+
+
+def test_note_drawer_collapses_after_saving(client):
+    body = client.get("/").text
+    save = body.split("$('#notesave').addEventListener")[1].split("document.addEventListener")[0]
+    assert "closeNote();" in save
+    assert "Collapses on save" in save
+
+
+def test_tooltip_delay_is_one_second(client):
+    assert "TIP_DELAY_MS = 1000" in client.get("/").text
+
+
+def test_icons_are_inline_and_monochrome(client):
+    body = client.get("/").text
+    assert 'stroke="currentColor"' in body
+    assert "ICONS = {" in body
+
+
+def test_icon_buttons_keep_an_accessible_name(client):
+    # Icon-only buttons have no visible text, so the name must come from
+    # aria-label, and the same words drive the tooltip.
+    body = client.get("/").text
+    assert 'aria-label="${esc(label)}"' in body
+    assert 'data-tip="${esc(label)}"' in body
+
+
+def test_touch_gets_the_labels_too(client):
+    # A tablet has no hover; without a long press the labels are unreachable
+    # on the device this app is built for.
+    body = client.get("/").text
+    assert "TIP_HOLD_MS" in body
+    assert "touchstart" in body
+
+
+def test_check_now_is_green_like_upload(client):
+    rule = client.get("/").text.split("#check {")[1].split("}")[0]
+    assert "var(--accept)" in rule
+
+
+def test_interesting_uses_an_exclamation_not_a_tick(client):
+    body = client.get("/").text
+    assert "iconBtn('yes', 'bang'" in body
+    # A tick reads as "done"; this decision is "this matters".
+    assert "iconBtn('yes', 'check'" not in body

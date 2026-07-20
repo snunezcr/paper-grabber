@@ -45,10 +45,11 @@
   .filed-actions .recover { flex: 0 0 auto; padding: 0 .9rem;
     border-color: var(--accept); color: var(--accept); }
 
-  #check { min-height: 40px; padding: 0 .9rem; cursor: pointer;
-    display: inline-flex; align-items: center; gap: .45rem; white-space: nowrap;
-    border: 1px solid var(--accent); border-radius: 8px;
-    background: none; color: var(--accent); font-size: .88rem; font-weight: 600;
+  /* Green, matching Upload: both are the affirmative action of their view. */
+  #check { min-height: 40px; padding: 0 .75rem; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    gap: .45rem; border: 1px solid var(--accept); border-radius: 8px;
+    background: none; color: var(--accept);
   }
   #check[disabled] { opacity: .55; cursor: default; }
   #check .spin {
@@ -266,6 +267,19 @@
   .filed-actions { margin-top: .5rem; align-items: center; flex-wrap: wrap; }
   .filed-actions button { min-height: 44px; font-size: .9rem; }
   .filed-actions .up { border-color: var(--accept); color: var(--accept); }
+
+  /* Icons ---------------------------------------------------------------- */
+  .ic { width: 18px; height: 18px; display: block; flex: 0 0 auto; }
+  .iconbtn {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 44px; min-height: 44px; padding: 0 .55rem;
+  }
+  .actions .iconbtn { flex: 0 0 auto; }
+  /* Interesting and Skip stay wide: they are the whole point of a triage
+     card, and shrinking them to 44px would put the two decisions in a corner. */
+  .actions .yes, .actions .no { flex: 1; }
+  .filed-actions .note.has-note { border-color: var(--accent); color: var(--accent); }
+  #filebar .iconbtn { padding: 0 .9rem; }
   .filed-actions .verify { flex: 0 0 auto; padding: 0 .9rem; }
   .filed-actions .cardstatus {
     display: inline-flex; align-items: center; font-size: .85rem;
@@ -322,24 +336,48 @@
   #sheetfoot .newf { flex: 0 0 auto; padding: 0 1rem; border: 1px solid var(--line); background: none; color: var(--accent); }
   #sheetfoot .confirm { flex: 1; border: 1px solid var(--accent); background: var(--accent); color: #fff; }
 
-  #notebox {
-    position: fixed; inset: 0; z-index: 25; display: grid; place-items: center;
-    background: rgba(0,0,0,.45); padding: 1.2rem;
+  /* A right-hand drawer rather than a modal: the card being annotated stays
+     visible while the note is written. */
+  #notepanel {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 26;
+    width: min(24rem, 92vw); display: flex; flex-direction: column;
+    gap: .6rem; padding: calc(1rem + env(safe-area-inset-top)) 1rem
+      calc(1rem + env(safe-area-inset-bottom));
+    background: var(--sheet); border-left: 1px solid var(--line);
+    box-shadow: -6px 0 26px rgba(0,0,0,.22);
+    transform: translateX(100%); transition: transform .18s;
   }
-  #notetitle { font-weight: 600; color: var(--ink); }
+  #notepanel.open { transform: none; }
+  #notepanel[hidden] { display: none; }
+  @media (prefers-reduced-motion: reduce) { #notepanel { transition: none; } }
+
+  .nphead { display: flex; align-items: center; gap: .5rem; }
+  .nplabel {
+    font-size: .78rem; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  #notecancel {
+    margin-left: auto; display: inline-flex; align-items: center;
+    justify-content: center; width: 36px; height: 36px; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--card); color: var(--muted);
+  }
+  #notetitle {
+    margin: 0; font-size: .92rem; font-weight: 600; color: var(--ink);
+    line-height: 1.35;
+  }
   #notetext {
-    width: 100%; font: 15px/1.5 system-ui, sans-serif; padding: .6rem;
+    flex: 1; min-height: 8rem; width: 100%; padding: .6rem;
+    font: 15px/1.5 system-ui, sans-serif; resize: none;
     background: var(--bg); color: var(--ink);
-    border: 1px solid var(--line); border-radius: 8px; resize: vertical;
+    border: 1px solid var(--line); border-radius: 8px;
   }
-  .notehint { margin: .5rem 0 0; font-size: .82rem; color: var(--muted); }
-  .noteactions { display: flex; gap: .6rem; justify-content: flex-end; margin-top: .7rem; }
-  .noteactions button {
-    min-height: 44px; padding: 0 1.1rem; cursor: pointer; font-weight: 600;
+  .notehint { margin: 0; font-size: .82rem; color: var(--muted); }
+  #notesave {
+    min-height: 48px; cursor: pointer; font-weight: 600; font-size: .95rem;
     border-radius: 10px; border: 1px solid var(--accent);
     background: var(--accent); color: #fff;
   }
-  .noteactions .ghostbtn { background: none; color: var(--ink); border-color: var(--line); }
 
   #citebox {
     position: fixed; inset: 0; z-index: 25; display: grid; place-items: center;
@@ -379,6 +417,15 @@
     background: none;
   }
 
+  #tip {
+    position: fixed; z-index: 40; pointer-events: none;
+    max-width: 15rem; padding: .35rem .55rem; border-radius: 7px;
+    background: var(--ink); color: var(--bg);
+    font-size: .8rem; line-height: 1.35; text-align: center;
+    box-shadow: 0 3px 12px rgba(0,0,0,.28);
+  }
+  #tip[hidden] { display: none; }
+
   #empty, #error, .note { text-align: center; color: var(--muted); padding: 2.5rem 1rem; }
   #error { color: var(--reject); padding: 1rem; }
   #notice {
@@ -402,9 +449,9 @@
     <h1>Research Stream</h1>
     <span id="counts"></span>
     <button id="rejectedbtn" class="danger" aria-pressed="false"
-            title="Show rejected papers">Rejected</button>
-    <button id="check" title="Check Gmail for new alerts now">
-      <span class="spin" hidden></span><span class="label">Check now</span>
+            aria-label="Rejected" data-tip="Show rejected papers">${''}</button>
+    <button id="check" aria-label="Check now" data-tip="Check mail for new alerts">
+      <span class="spin" hidden></span><span class="glyph"></span>
     </button>
   </div>
   <div id="authbar" hidden>
@@ -422,11 +469,11 @@
 <button id="filtertoggle" aria-expanded="false" aria-controls="sidebar">Filters</button>
 
 <div id="shell">
-<button id="sidebarexpand" title="Show filters" aria-label="Show filters">&raquo;</button>
+<button id="sidebarexpand" aria-label="Show filters" data-tip="Show filters"></button>
 <aside id="sidebar" aria-label="Filters">
   <div id="sidebarhead">
     <span class="shtitle">Filters</span>
-    <button id="sidebarcollapse" title="Hide filters" aria-label="Hide filters">&laquo;</button>
+    <button id="sidebarcollapse" aria-label="Hide filters" data-tip="Hide filters"></button>
   </div>
   <div class="fgroup fsearch">
     <label class="shlabel" for="q">Search</label>
@@ -486,24 +533,23 @@
 
 <div id="filebar" hidden>
   <span class="count" id="selcount">0 selected</span>
-  <button class="ghost" id="selall">Select all</button>
-  <button class="danger" id="selreject">Reject</button>
-  <button id="filesel">File to…</button>
+  <button class="ghost iconbtn" id="selall" aria-label="Select all" data-tip="Select all"></button>
+  <button class="danger iconbtn" id="selreject" aria-label="Reject" data-tip="Reject the selected papers"></button>
+  <button class="iconbtn" id="filesel" aria-label="File to" data-tip="Choose a destination folder"></button>
 </div>
 
 <button id="undo" hidden>Undo</button>
 
-<div id="notebox" hidden>
-  <div class="citepanel">
-    <p id="notetitle"></p>
-    <textarea id="notetext" rows="7" placeholder="Why this paper matters, what to read first…"></textarea>
-    <p class="notehint">Saved here now; written to the file's description in Drive when it is uploaded.</p>
-    <div class="noteactions">
-      <button id="notecancel" class="ghostbtn">Cancel</button>
-      <button id="notesave">Save</button>
-    </div>
+<aside id="notepanel" aria-label="Note" hidden>
+  <div class="nphead">
+    <span class="nplabel">Note</span>
+    <button id="notecancel" aria-label="Close" data-tip="Close without saving"></button>
   </div>
-</div>
+  <p id="notetitle"></p>
+  <textarea id="notetext" placeholder="Why this paper matters, what to read first…"></textarea>
+  <p class="notehint">Written to the file's description in Drive when it is uploaded.</p>
+  <button id="notesave">Save</button>
+</aside>
 
 <div id="citebox" hidden>
   <div class="citepanel">
@@ -528,6 +574,125 @@
 
 <script>
 const $ = s => document.querySelector(s);
+
+// ---------- icons ----------
+//
+// Lucide (ISC): 24x24, 2px rounded strokes. Inlined rather than linked --
+// the page must stay self-contained -- and drawn with currentColor so each
+// button's own colour carries through in both themes without extra rules.
+
+const ICONS = {
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  // Drawn rather than borrowed: a bare exclamation, the stem and a round
+  // cap for the dot, so it sits at the same weight as the rest of the set.
+  bang: '<path d="M12 4v10"/><path d="M12 19h.01"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  'folder-input':
+    '<path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1"/><path d="M2 13h10"/><path d="m9 16 3-3-3-3"/>',
+  pencil: '<path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>',
+  quote:
+    '<path d="M16 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h1.5a.5.5 0 0 1 .5.5v.5a2 2 0 0 1-2 2h-.5a1 1 0 0 0-1 1v1a1 1 0 0 0 1 1h.5a6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/><path d="M5 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h1.5a.5.5 0 0 1 .5.5v.5a2 2 0 0 1-2 2h-.5a1 1 0 0 0-1 1v1a1 1 0 0 0 1 1h.5a6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/>',
+  'cloud-upload':
+    '<path d="M12 13v8"/><path d="m8 17 4-4 4 4"/><path d="M20 16.5A4.5 4.5 0 0 0 17.5 8h-1.8A7 7 0 1 0 4 14.9"/>',
+  'corner-up-left': '<path d="M9 14 4 9l5-5"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>',
+  'external-link':
+    '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  'refresh-cw':
+    '<path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/>',
+  'rotate-ccw':
+    '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+  ban: '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
+  'check-square':
+    '<path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+  'chevron-left': '<path d="m15 18-6-6 6-6"/>',
+  'chevron-right': '<path d="m9 18 6-6-6-6"/>',
+};
+
+function icon(name) {
+  return `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+    aria-hidden="true" focusable="false">${ICONS[name] || ''}</svg>`;
+}
+
+// A button with no visible text still needs an accessible name and something
+// a pointer or a long press can reveal.
+function iconBtn(cls, name, label, extra = '') {
+  return `<button class="${cls} iconbtn" aria-label="${esc(label)}"
+    data-tip="${esc(label)}" ${extra}>${icon(name)}</button>`;
+}
+
+function paintStaticIcons() {
+  const map = {
+    '#rejectedbtn': 'ban',
+    '#check .glyph': 'refresh-cw',
+    '#selall': 'check-square',
+    '#selreject': 'x',
+    '#filesel': 'folder-input',
+    '#sidebarcollapse': 'chevron-left',
+    '#sidebarexpand': 'chevron-right',
+  };
+  map['#notecancel'] = 'x';
+  for (const [sel, name] of Object.entries(map)) {
+    const el = document.querySelector(sel);
+    if (el) el.innerHTML = icon(name);
+  }
+}
+
+// ---------- tooltips ----------
+
+const tip = document.createElement('div');
+tip.id = 'tip';
+tip.hidden = true;
+document.body.appendChild(tip);
+
+let tipTimer = null;
+
+function showTip(el) {
+  const text = el.getAttribute('data-tip');
+  if (!text) return;
+  tip.textContent = text;
+  tip.hidden = false;
+  const r = el.getBoundingClientRect();
+  const t = tip.getBoundingClientRect();
+  // Above by preference; below when there is no room, so it never leaves the
+  // viewport on a short card near the top.
+  const top = r.top - t.height - 8;
+  tip.style.top = `${(top < 4 ? r.bottom + 8 : top)}px`;
+  tip.style.left =
+    `${Math.max(4, Math.min(window.innerWidth - t.width - 4, r.left + r.width / 2 - t.width / 2))}px`;
+}
+
+function hideTip() {
+  clearTimeout(tipTimer);
+  tip.hidden = true;
+}
+
+const TIP_DELAY_MS = 1000;
+// A press held this long is asking what the button is, not pressing it. Touch
+// devices have no hover at all, so without this the labels are unreachable on
+// the tablet the app is built for.
+const TIP_HOLD_MS = 600;
+
+document.addEventListener('mouseover', e => {
+  const el = e.target.closest('[data-tip]');
+  if (!el) return;
+  clearTimeout(tipTimer);
+  tipTimer = setTimeout(() => showTip(el), TIP_DELAY_MS);
+});
+document.addEventListener('mouseout', e => {
+  if (e.target.closest('[data-tip]')) hideTip();
+});
+document.addEventListener('touchstart', e => {
+  const el = e.target.closest('[data-tip]');
+  if (!el) return;
+  clearTimeout(tipTimer);
+  tipTimer = setTimeout(() => showTip(el), TIP_HOLD_MS);
+}, {passive: true});
+['touchend', 'touchcancel', 'touchmove', 'scroll'].forEach(evt =>
+  document.addEventListener(evt, hideTip, {passive: true}));
+window.addEventListener('blur', hideTip);
+
+
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -638,8 +803,8 @@ function triageCard(p) {
   el.className = 'card';
   el.innerHTML = cardBody(p) + `
     <div class="actions">
-      <button class="yes">Interesting</button>
-      <button class="no">Skip</button>
+      ${iconBtn('yes', 'bang', 'Interesting')}
+      ${iconBtn('no', 'x', 'Skip')}
     </div>`;
   wireAbstract(el);
   el.querySelector('.yes').addEventListener('click', () => decide(el, p, 'accepted'));
@@ -885,10 +1050,11 @@ function filingCard(p, {selectable}) {
     actions.className = 'actions filed-actions';
     const hint = state.suggestions?.[p.key];
     actions.innerHTML = `
-      ${hint ? `<button class="suggest" title="${esc(hint.reason)}">File to ${esc(hint.folder_name)}</button>` : ''}
+      ${hint ? `<button class="suggest" data-tip="${esc(hint.reason)}">${icon('folder-input')}<span>${esc(hint.folder_name)}</span></button>` : ''}
       <span class="cardstatus" hidden></span>
-      <button class="note">${p.note ? 'Note ✓' : 'Note'}</button>
-      <button class="cite">Cite</button>`;
+      ${iconBtn('note' + (p.note ? ' has-note' : ''), 'pencil',
+                p.note ? 'Edit note' : 'Add a note')}
+      ${iconBtn('cite', 'quote', 'Copy BibTeX')}`;
     actions.querySelector('.note').addEventListener('click', () => editNote(p));
     if (hint) {
       actions.querySelector('.suggest')
@@ -905,15 +1071,16 @@ function filingCard(p, {selectable}) {
       actions.innerHTML = `
         <span class="done">In Drive</span>
         <span class="cardstatus" hidden></span>
-        <button class="cite">Cite</button>`;
+        ${iconBtn('cite', 'quote', 'Copy BibTeX')}`;
       actions.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
     } else {
       actions.innerHTML = `
-        <button class="up">Upload</button>
-        <button class="unfile">Not yet</button>
+        ${iconBtn('up', 'cloud-upload', 'Upload to Drive')}
+        ${iconBtn('unfile', 'corner-up-left', 'Not yet — clear the destination')}
         <span class="cardstatus" hidden></span>
-        <button class="note">${p.note ? 'Note ✓' : 'Note'}</button>
-        <button class="cite">Cite</button>`;
+        ${iconBtn('note' + (p.note ? ' has-note' : ''), 'pencil',
+                  p.note ? 'Edit note' : 'Add a note')}
+        ${iconBtn('cite', 'quote', 'Copy BibTeX')}`;
       actions.querySelector('.note').addEventListener('click', () => editNote(p));
       actions.querySelector('.up').addEventListener('click', () => uploadOne(p, el));
       actions.querySelector('.unfile').addEventListener('click', () => unfile(p));
@@ -924,23 +1091,31 @@ function filingCard(p, {selectable}) {
   return el;
 }
 
+const notePanel = $('#notepanel');
+
 function editNote(paper) {
   state.notePaper = paper;
   $('#notetitle').textContent = paper.title;
   $('#notetext').value = paper.note || '';
-  $('#notebox').hidden = false;
-  $('#notetext').focus();
+  notePanel.hidden = false;
+  // Next frame, so the transform animates in from the right rather than the
+  // panel simply appearing.
+  requestAnimationFrame(() => {
+    notePanel.classList.add('open');
+    $('#notetext').focus();
+  });
 }
 
 function closeNote() {
-  $('#notebox').hidden = true;
+  notePanel.classList.remove('open');
   state.notePaper = null;
+  // Wait for the slide out before removing it from the layout.
+  setTimeout(() => {
+    if (!notePanel.classList.contains('open')) notePanel.hidden = true;
+  }, 200);
 }
 
 $('#notecancel').addEventListener('click', closeNote);
-$('#notebox').addEventListener('click', e => {
-  if (e.target === $('#notebox')) closeNote();
-});
 
 $('#notesave').addEventListener('click', async () => {
   const paper = state.notePaper;
@@ -952,6 +1127,7 @@ $('#notesave').addEventListener('click', async () => {
       method: 'PUT', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({note: $('#notetext').value})
     });
+    // Collapses on save, as the note is now recorded and the card shows it.
     closeNote();
     loadFiling();
   } catch (e) {
@@ -962,7 +1138,7 @@ $('#notesave').addEventListener('click', async () => {
 });
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !$('#notebox').hidden) closeNote();
+  if (e.key === 'Escape' && !notePanel.hidden) closeNote();
 });
 
 async function copyToClipboard(text) {
@@ -1114,12 +1290,13 @@ function processedCard(p) {
   el.innerHTML = cardBody(p) + `
     <div class="actions filed-actions">
       ${p.drive_url
-        ? `<a class="open" href="${esc(p.drive_url)}" target="_blank" rel="noopener">Open in Drive</a>`
+        ? `<a class="open iconbtn" href="${esc(p.drive_url)}" target="_blank"
+             rel="noopener" aria-label="Open in Drive" data-tip="Open in Drive">${icon('external-link')}</a>`
         : ''}
-      <button class="verify">Check</button>
+      ${iconBtn('verify', 'refresh-cw', 'Check it is still in Drive')}
       <span class="done">${p.dest_folder_name ? '→ ' + esc(p.dest_folder_name) : 'In Drive'}</span>
       <span class="cardstatus" hidden></span>
-      <button class="cite">Cite</button>
+      ${iconBtn('cite', 'quote', 'Copy BibTeX')}
     </div>`;
   wireAbstract(el);
   el.querySelector('.verify').addEventListener('click', () => verifyOne(p, el));
@@ -1159,7 +1336,7 @@ function rejectedCard(p) {
   el.innerHTML = cardBody(p) + `
     <div class="actions filed-actions">
       <span class="cardstatus" hidden></span>
-      <button class="recover">Recover</button>
+      ${iconBtn('recover', 'rotate-ccw', 'Recover to Filing')}
     </div>`;
   wireAbstract(el);
   el.querySelector('.recover').addEventListener('click', () => recoverOne(p, el));
@@ -1473,7 +1650,8 @@ let pollTimer = null;
 function setChecking(on) {
   checkBtn.disabled = on;
   checkBtn.querySelector('.spin').hidden = !on;
-  checkBtn.querySelector('.label').textContent = on ? 'Checking…' : 'Check now';
+  checkBtn.querySelector('.glyph').hidden = on;
+  checkBtn.setAttribute('data-tip', on ? 'Checking for new alerts…' : 'Check mail for new alerts');
 }
 
 function describe(r) {
@@ -1665,6 +1843,7 @@ function syncSidebarVisibility() {
 }
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+paintStaticIcons();
 noticeSignInReturn();
 syncSidebarVisibility();
 checkServerVersion();
