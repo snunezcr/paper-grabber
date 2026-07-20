@@ -259,14 +259,39 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
 
 let state = { tab: 'triage', selected: new Set(), base: null, sheet: null };
 
+// Capabilities this page expects the server to have.
+const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse'];
+
 async function api(path, opts) {
   const r = await fetch(path, opts);
   if (!r.ok) {
     let detail = `HTTP ${r.status}`;
     try { detail = (await r.json()).detail || detail; } catch {}
+    // A 404 on an endpoint this page knows about means the server predates
+    // the page, not that the request was wrong.
+    if (r.status === 404 && path.startsWith('/api/')) {
+      detail = `${detail} — the server may be running older code; restart it`;
+    }
     throw new Error(detail);
   }
   return r.json();
+}
+
+async function checkServerVersion() {
+  try {
+    const v = await api('/api/version');
+    const have = new Set(v.capabilities || []);
+    const missing = NEEDS.filter(c => !have.has(c));
+    if (missing.length) {
+      showError(
+        `This page needs features the running server does not have ` +
+        `(${missing.join(', ')}). Restart it: pkill -f "paper-grabber serve" ` +
+        `then paper-grabber serve`
+      );
+    }
+  } catch (e) {
+    showError('Server is running older code — restart it to pick up this page.');
+  }
 }
 
 function showError(msg) {
@@ -762,6 +787,7 @@ function showNotice(msg) {
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 noticeSignInReturn();
+checkServerVersion();
 resumeRefreshIfRunning();
 loadAuth();
 loadTriage();

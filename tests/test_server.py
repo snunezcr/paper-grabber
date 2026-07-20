@@ -395,3 +395,29 @@ def test_counts_line_renders_all_four(client):
     body = client.get("/").text
     for word in ("pending", "accepted", "rejected", "filed"):
         assert word in body
+
+
+# --- version and capability negotiation ---------------------------------------
+
+
+def test_version_lists_capabilities(client):
+    v = client.get("/api/version").json()
+    assert "upload" in v["capabilities"]
+    assert "unfile" in v["capabilities"]
+    assert "refresh" in v["capabilities"]
+
+
+def test_every_advertised_capability_has_a_route(client):
+    # A capability the server claims but cannot serve would be worse than not
+    # advertising it at all.
+    v = client.get("/api/version").json()
+    paths = {"upload": "/api/upload", "refresh": "/api/refresh"}
+    for name, path in paths.items():
+        assert name in v["capabilities"]
+        assert client.get(path).status_code == 200
+
+
+def test_page_checks_the_server_version(client):
+    body = client.get("/").text
+    assert "checkServerVersion" in body
+    assert "older code" in body

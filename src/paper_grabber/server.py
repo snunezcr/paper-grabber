@@ -339,6 +339,17 @@ def create_app(
         return {
             "version": __version__,
             "loopback_http_supported": True,
+            # The page checks these on load: a browser holding a newer page
+            # against an older server produces 404s that look like broken
+            # buttons, which has been mistaken for a code fault more than once.
+            "capabilities": sorted(
+                {
+                    "refresh",
+                    "upload",
+                    "unfile",
+                    "drive-browse",
+                }
+            ),
         }
 
     # --- sign-in ----------------------------------------------------------------
