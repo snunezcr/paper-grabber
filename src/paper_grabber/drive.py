@@ -202,6 +202,35 @@ class DriveClient:
             md5=response.get("md5Checksum"),
         )
 
+    def file_status(self, file_id: str) -> dict[str, Any]:
+        """Report whether an uploaded file is still in Drive.
+
+        Returns ``{"present": bool, "trashed": bool, "name": str | None}``.
+
+        A 404 means the file is genuinely gone. Any other failure raises,
+        because the caller must be able to tell "definitely deleted" from
+        "could not reach Drive" -- treating the latter as deletion would
+        silently undo an upload that actually succeeded.
+        """
+        try:
+            resp = (
+                self._service.files()
+                .get(fileId=file_id, fields="id,name,trashed")
+                .execute()
+            )
+        except HttpError as exc:
+            if getattr(exc, "resp", None) is not None and exc.resp.status == 404:
+                return {"present": False, "trashed": False, "name": None}
+            raise DriveError(f"could not check {file_id}: {exc}") from exc
+
+        trashed = bool(resp.get("trashed"))
+        return {
+            # A file in the bin is gone as far as the user is concerned.
+            "present": not trashed,
+            "trashed": trashed,
+            "name": resp.get("name"),
+        }
+
     def exists_in_folder(self, name: str, folder_id: str) -> bool:
         """True when a file of this name is already in the folder.
 

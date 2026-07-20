@@ -119,6 +119,7 @@
   .filed-actions { margin-top: .5rem; }
   .filed-actions button { min-height: 44px; font-size: .9rem; }
   .filed-actions .up { border-color: var(--accept); color: var(--accept); }
+  .filed-actions .verify { flex: 0 0 auto; padding: 0 .9rem; }
   .filed-actions .cardstatus {
     display: inline-flex; align-items: center; font-size: .85rem;
     color: var(--muted); padding-left: .3rem;
@@ -266,7 +267,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
 let state = { tab: 'triage', selected: new Set(), base: null, sheet: null };
 
 // Capabilities this page expects the server to have.
-const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed'];
+const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify'];
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -547,10 +548,38 @@ function processedCard(p) {
       ${p.drive_url
         ? `<a class="open" href="${esc(p.drive_url)}" target="_blank" rel="noopener">Open in Drive</a>`
         : ''}
+      <button class="verify">Check</button>
       <span class="done">${p.dest_folder_name ? '→ ' + esc(p.dest_folder_name) : 'In Drive'}</span>
+      <span class="cardstatus" hidden></span>
     </div>`;
   wireAbstract(el);
+  el.querySelector('.verify').addEventListener('click', () => verifyOne(p, el));
   return el;
+}
+
+async function verifyOne(paper, card) {
+  const button = card.querySelector('.verify');
+  button.disabled = true;
+  cardStatus(card, 'Checking Drive…');
+  try {
+    const r = await api(`/api/papers/${encodeURIComponent(paper.key)}/verify`, {
+      method: 'POST'
+    });
+    showCounts(r.counts);
+    if (r.present) {
+      cardStatus(card, r.detail);
+      button.disabled = false;
+    } else {
+      // It has moved to Filing, so both lists changed.
+      showNotice(`${paper.title.slice(0, 44)}: ${r.detail}`);
+      loadProcessed();
+      loadFiling();
+    }
+  } catch (e) {
+    // A failed check must leave the paper exactly as it was.
+    button.disabled = false;
+    cardStatus(card, `Could not check: ${e.message}`, {bad: true});
+  }
 }
 
 async function loadProcessed() {

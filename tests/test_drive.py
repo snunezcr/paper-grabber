@@ -350,3 +350,38 @@ def test_exists_in_folder_true_when_present():
 def test_exists_in_folder_false_when_absent():
     files = FakeFiles(list_results=[{"files": []}])
     assert client(files).exists_in_folder("2026 - A.pdf", "FOLDER") is False
+
+
+# --- file status --------------------------------------------------------------
+
+
+def test_file_status_reports_a_live_file():
+    files = FakeFiles(get_results={"F1": {"id": "F1", "name": "a.pdf", "trashed": False}})
+    assert client(files).file_status("F1") == {
+        "present": True, "trashed": False, "name": "a.pdf"}
+
+
+def test_trashed_file_is_not_present():
+    # In the bin is gone as far as the user is concerned.
+    files = FakeFiles(get_results={"F1": {"id": "F1", "name": "a.pdf", "trashed": True}})
+    status = client(files).file_status("F1")
+    assert status["present"] is False and status["trashed"] is True
+
+
+def test_deleted_file_reports_absent():
+    files = FakeFiles(get_error=http_error(404))
+    assert client(files).file_status("F1")["present"] is False
+
+
+def test_other_errors_raise_rather_than_implying_deletion():
+    # A 403 or a network failure must not be read as "the file is gone", or a
+    # good upload gets silently undone.
+    files = FakeFiles(get_error=http_error(403))
+    with pytest.raises(DriveError, match="could not check"):
+        client(files).file_status("F1")
+
+
+def test_server_error_also_raises():
+    files = FakeFiles(get_error=http_error(500))
+    with pytest.raises(DriveError):
+        client(files).file_status("F1")

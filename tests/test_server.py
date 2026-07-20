@@ -208,7 +208,10 @@ def test_enriched_year_supersedes_the_alert_year(seeded):
 class FakeDrive:
     """Just enough Drive for the picker."""
 
-    def __init__(self, tree=None, fail=False):
+    def __init__(self, tree=None, fail=False, missing=(), trashed=(), file_error=None):
+        self.missing = set(missing)
+        self.trashed = set(trashed)
+        self.file_error = file_error
         # {folder_id: (name, parent, [child_ids])}
         self.tree = tree or {
             "BASE": ("Papers", "ROOT", ["QUANTUM", "NETWORKS"]),
@@ -237,6 +240,15 @@ class FakeDrive:
             cur = parent
         trail.reverse()
         return trail or [{"id": "root", "name": "My Drive"}]
+
+    def file_status(self, file_id):
+        if self.file_error:
+            raise self.file_error
+        if file_id in self.missing:
+            return {"present": False, "trashed": False, "name": None}
+        if file_id in self.trashed:
+            return {"present": False, "trashed": True, "name": "gone.pdf"}
+        return {"present": True, "trashed": False, "name": "a.pdf"}
 
     def create_folder(self, name, *, parent_id):
         new_id = f"NEW-{name}"
@@ -484,3 +496,85 @@ def test_page_has_the_processed_tab(app_client):
 
 def test_processed_is_an_advertised_capability(app_client):
     assert "processed" in app_client.get("/api/version").json()["capabilities"]
+
+
+# --- verifying a processed paper ----------------------------------------------
+
+
+def processed_key(app_client, seeded, drive_id="DRIVE-ABC"):
+    accept_all(app_client)
+    key = app_client.get("/api/accepted").json()["unfiled"][0]["key"]
+    with Ledger(seeded) as led:
+        led.set_destination(key, "F1", "Quantum")
+        led.set_uploaded(key, drive_id)
+    return key
+
+
+def test_verify_reports_a_file_still_present(app_client, seeded):
+    key = processed_key(app_client, seeded)
+    r = app_client.post(f"/api/papers/{key}/verify")
+    assert r.status_code == 200
+    assert r.json()["present"] is True
+    # Still processed, not moved.
+    assert len(app_client.get("/api/processed").json()["papers"]) == 1
+
+
+def test_missing_file_returns_the_paper_to_filing(seeded):
+    drive = FakeDrive(missing=["DRIVE-GONE"])
+    c = TestClient(create_app(seeded, drive_factory=lambda: drive))
+    key = processed_key(c, seeded, drive_id="DRIVE-GONE")
+
+    r = c.post(f"/api/papers/{key}/verify")
+    assert r.json()["present"] is False
+    assert "returned to Filing" in r.json()["detail"]
+    assert c.get("/api/processed").json()["papers"] == []
+    # Back in the queue with its destination intact, ready to re-upload.
+    filed = c.get("/api/accepted").json()["filed"]
+    assert [p["key"] for p in filed] == [key]
+    assert filed[0]["dest_folder_name"] == "Quantum"
+
+
+def test_trashed_file_counts_as_gone(seeded):
+    drive = FakeDrive(trashed=["DRIVE-BIN"])
+    c = TestClient(create_app(seeded, drive_factory=lambda: drive))
+    key = processed_key(c, seeded, drive_id="DRIVE-BIN")
+    r = c.post(f"/api/papers/{key}/verify")
+    assert r.json()["present"] is False
+    assert r.json()["trashed"] is True
+    assert "bin" in r.json()["detail"]
+
+
+def test_a_drive_failure_changes_nothing(seeded):
+    # The safety property: an unreachable Drive must not be read as deletion.
+    from paper_grabber.drive import DriveError
+
+    drive = FakeDrive(file_error=DriveError("network down"))
+    c = TestClient(create_app(seeded, drive_factory=lambda: drive))
+    key = processed_key(c, seeded)
+
+    assert c.post(f"/api/papers/{key}/verify").status_code == 502
+    assert len(c.get("/api/processed").json()["papers"]) == 1
+    assert c.get("/api/accepted").json()["filed"] == []
+
+
+def test_verify_refuses_a_paper_never_uploaded(app_client, seeded):
+    accept_all(app_client)
+    key = app_client.get("/api/accepted").json()["unfiled"][0]["key"]
+    assert app_client.post(f"/api/papers/{key}/verify").status_code == 409
+
+
+def test_verify_unknown_paper_is_404(app_client):
+    assert app_client.post("/api/papers/nope/verify").status_code == 404
+
+
+def test_counts_move_from_processed_to_filed(seeded):
+    drive = FakeDrive(missing=["DRIVE-GONE"])
+    c = TestClient(create_app(seeded, drive_factory=lambda: drive))
+    key = processed_key(c, seeded, drive_id="DRIVE-GONE")
+    counts = c.post(f"/api/papers/{key}/verify").json()["counts"]
+    assert counts["processed"] == 0
+    assert counts["filed"] == 1
+
+
+def test_processed_cards_have_a_check_button(app_client):
+    assert 'class="verify"' in app_client.get("/").text

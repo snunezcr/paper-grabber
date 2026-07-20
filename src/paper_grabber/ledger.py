@@ -310,6 +310,20 @@ class Ledger:
         self._db.commit()
         return cur.rowcount > 0
 
+    def clear_uploaded(self, key: str) -> bool:
+        """Forget that a paper reached Drive, keeping its destination.
+
+        Used when the file is found to be gone: the paper returns to the
+        filing queue already pointed at the folder it was meant for, so it can
+        simply be uploaded again.
+        """
+        cur = self._db.execute(
+            "UPDATE papers SET drive_file_id = NULL, uploaded_at = NULL WHERE key = ?",
+            (key,),
+        )
+        self._db.commit()
+        return cur.rowcount > 0
+
     def awaiting_download(self) -> list[LedgerPaper]:
         """Accepted papers not yet staged and not already in Drive."""
         rows = self._db.execute(

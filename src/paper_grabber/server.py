@@ -208,6 +208,47 @@ def create_app(
                 "counts": led.counts(),
             }
 
+    @app.post("/api/papers/{key}/verify")
+    def verify(key: str) -> dict[str, Any]:
+        """Check a processed paper is still in Drive; requeue it if not."""
+        with open_ledger() as led:
+            paper = led.get(key)
+            if paper is None:
+                raise HTTPException(status_code=404, detail="no such paper")
+            if not paper.drive_file_id:
+                raise HTTPException(status_code=409, detail="not uploaded yet")
+
+            drive = open_drive()
+            try:
+                status = drive.file_status(paper.drive_file_id)
+            except DriveError as exc:
+                # Could not reach Drive. Say so and change nothing: treating a
+                # network failure as deletion would undo a good upload.
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+            if status["present"]:
+                return {
+                    "key": key,
+                    "present": True,
+                    "detail": f"still in Drive as {status['name']}"
+                    if status.get("name")
+                    else "still in Drive",
+                    "counts": led.counts(),
+                }
+
+            led.clear_uploaded(key)
+            return {
+                "key": key,
+                "present": False,
+                "trashed": status["trashed"],
+                "detail": (
+                    "in the Drive bin; returned to Filing"
+                    if status["trashed"]
+                    else "no longer in Drive; returned to Filing"
+                ),
+                "counts": led.counts(),
+            }
+
     @app.post("/api/papers/{key}/unfile")
     def unfile(key: str) -> dict[str, Any]:
         """Return a filed paper to the queue by clearing its destination."""
@@ -358,6 +399,7 @@ def create_app(
                     "unfile",
                     "drive-browse",
                     "processed",
+                    "verify",
                 }
             ),
         }
