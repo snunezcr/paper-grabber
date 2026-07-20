@@ -315,6 +315,67 @@ def create_app(
             return {"running": False, "started_at": None, "last": None}
         return active.state().to_dict()
 
+    @app.get("/api/suggestions")
+    def suggestions() -> dict[str, Any]:
+        """Suggested destinations for papers awaiting one.
+
+        Candidates are the subfolders of the base folder, plus every folder
+        already used -- a folder that has been filed into is a candidate even
+        if it now lives elsewhere.
+        """
+        from .suggest import build_idf, suggest_folder
+
+        with open_ledger() as led:
+            base = led.get_setting(SETTING_BASE_FOLDER_ID)
+            unfiled = led.accepted(filed=False)
+            # The corpus is the whole queue, not just the unfiled papers: a
+            # word's rarity is a property of the collection.
+            corpus = [
+                f"{v['title']} {v['abstract'] or ''}"
+                for v in (paper_view(p) for p in led.pending() + led.accepted())
+            ]
+            used: dict[str, str] = {}
+            history: dict[str, list[str]] = {}
+            for entry in led.processed() + led.accepted(filed=True):
+                if entry.dest_folder_id:
+                    used[entry.dest_folder_id] = entry.dest_folder_name or ""
+                    history.setdefault(entry.dest_folder_id, []).append(entry.title)
+
+        if not unfiled:
+            return {"suggestions": {}, "folders": []}
+
+        folders = [{"id": fid, "name": name} for fid, name in used.items()]
+        if base:
+            try:
+                for child in open_drive().list_child_folders(base):
+                    if child["id"] not in used:
+                        folders.append(child)
+            except (DriveError, HTTPException):
+                # Suggestions are a convenience; an unreachable Drive should
+                # not break the Filing tab.
+                pass
+
+        idf = build_idf(corpus)
+        out: dict[str, Any] = {}
+        for entry in unfiled:
+            view = paper_view(entry)
+            found = suggest_folder(
+                title=view["title"],
+                abstract=view["abstract"],
+                venue=view["venue"],
+                folders=folders,
+                history=history,
+                idf=idf,
+            )
+            if found:
+                out[entry.key] = {
+                    "folder_id": found.folder_id,
+                    "folder_name": found.folder_name,
+                    "score": found.score,
+                    "reason": found.reason,
+                }
+        return {"suggestions": out, "folders": folders}
+
     @app.post("/api/destination")
     def set_destination(body: DestinationIn) -> dict[str, Any]:
         """Assign one destination to any number of papers at once."""
@@ -419,6 +480,7 @@ def create_app(
                     "verify",
                     "scope-check",
                     "bibtex",
+                    "suggestions",
                 }
             ),
         }

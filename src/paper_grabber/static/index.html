@@ -332,6 +332,11 @@
   /* Pinned right: it is the one control that is never the primary action
      on any of these cards, so it should not sit where the eye lands first. */
   .filed-actions .cite { flex: 0 0 auto; padding: 0 .9rem; margin-left: auto; }
+  .filed-actions .suggest {
+    flex: 0 0 auto; padding: 0 .9rem; font-size: .87rem;
+    border-color: var(--accent); color: var(--accent);
+    background: none;
+  }
 
   #empty, #error, .note { text-align: center; color: var(--muted); padding: 2.5rem 1rem; }
   #error { color: var(--reject); padding: 1rem; }
@@ -467,10 +472,10 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
 
 let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               pending: [], alerts: new Set(), knownAlerts: new Set(),
-              query: '' };
+              query: '', suggestions: {} };
 
 // Capabilities this page expects the server to have.
-const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex'];
+const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions'];
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -799,9 +804,15 @@ function filingCard(p, {selectable}) {
     // having decided where the PDF goes.
     const actions = document.createElement('div');
     actions.className = 'actions filed-actions';
+    const hint = state.suggestions?.[p.key];
     actions.innerHTML = `
+      ${hint ? `<button class="suggest" title="${esc(hint.reason)}">File to ${esc(hint.folder_name)}</button>` : ''}
       <span class="cardstatus" hidden></span>
       <button class="cite">Cite</button>`;
+    if (hint) {
+      actions.querySelector('.suggest')
+        .addEventListener('click', () => acceptSuggestion(p, hint, el));
+    }
     actions.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
     el.querySelector('.pick > div:last-child').appendChild(actions);
   } else {
@@ -1025,8 +1036,37 @@ async function loadProcessed() {
   } catch (e) { showError(`Could not load processed papers: ${e.message}`); }
 }
 
+async function acceptSuggestion(paper, hint, card) {
+  const button = card.querySelector('.suggest');
+  button.disabled = true;
+  cardStatus(card, `Filing to ${hint.folder_name}…`);
+  try {
+    await api('/api/destination', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        keys: [paper.key],
+        folder_id: hint.folder_id,
+        folder_name: hint.folder_name,
+      })
+    });
+    loadFiling();
+  } catch (e) {
+    button.disabled = false;
+    cardStatus(card, `Could not file: ${e.message}`, {bad: true});
+  }
+}
+
+async function loadSuggestions() {
+  // Best-effort: a missing suggestion is a blank space, not an error.
+  try {
+    const data = await api('/api/suggestions');
+    state.suggestions = data.suggestions || {};
+  } catch (e) { state.suggestions = {}; }
+}
+
 async function loadFiling() {
   try {
+    await loadSuggestions();
     const data = await api('/api/accepted');
     state.base = data.base;
     $('#basefolder').textContent = data.base.folder_name
