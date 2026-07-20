@@ -638,8 +638,35 @@ def test_alert_group_is_hidden_for_a_single_alert(client):
 
 def test_alert_selection_is_multi_select(client):
     body = client.get("/").text
-    assert 'type = \'checkbox\'' in body or "box.type = 'checkbox'" in body
+    assert "box.type = 'checkbox'" in body
     assert "state.alerts" in body
+
+
+def test_all_button_selects_every_alert(client):
+    # It used to clear the selection and rely on "empty means everything",
+    # which left every box unticked and looked like it had done nothing.
+    body = client.get("/").text
+    assert "state.alerts = new Set(alertCounts().keys());" in body
+
+
+def test_none_button_clears_the_selection(client):
+    assert "state.alerts.clear();" in client.get("/").text
+
+
+def test_a_ticked_box_means_the_alert_is_shown(client):
+    # Literal semantics: no branch where an empty selection shows everything.
+    body = client.get("/").text
+    assert "if (!state.alerts.size) return papers;" not in body
+
+
+def test_new_alerts_arrive_selected(client):
+    # Otherwise a newly configured Scholar alert would show up invisible.
+    body = client.get("/").text
+    assert "state.knownAlerts" in body
+
+
+def test_empty_selection_explains_itself(client):
+    assert "No alerts selected" in client.get("/").text
 
 
 def test_papers_from_several_alerts_are_distinguishable(seeded):

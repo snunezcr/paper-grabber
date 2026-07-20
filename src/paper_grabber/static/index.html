@@ -346,7 +346,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
-              pending: [], alerts: new Set() };
+              pending: [], alerts: new Set(), knownAlerts: new Set() };
 
 // Capabilities this page expects the server to have.
 const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check'];
@@ -508,11 +508,21 @@ function renderAlertFilter() {
   const group = $('#fg-alerts');
   // One alert is not a choice.
   group.hidden = counts.size < 2;
-  if (group.hidden) { state.alerts.clear(); return; }
 
-  // Drop selections whose papers have all been triaged, or the list would be
-  // empty with no obvious way back.
-  for (const name of [...state.alerts]) if (!counts.has(name)) state.alerts.delete(name);
+  // A ticked box means "show this". Newly seen alerts start ticked, or a new
+  // Scholar alert would arrive invisible; alerts that have been fully triaged
+  // drop out of both sets.
+  for (const name of counts.keys()) {
+    if (!state.knownAlerts.has(name)) {
+      state.knownAlerts.add(name);
+      state.alerts.add(name);
+    }
+  }
+  for (const name of [...state.knownAlerts]) {
+    if (!counts.has(name)) { state.knownAlerts.delete(name); state.alerts.delete(name); }
+  }
+
+  if (group.hidden) return;
 
   // Busiest first: the noisy query is the one worth isolating.
   const entries = [...counts].sort((a, b) => b[1] - a[1]);
@@ -537,24 +547,33 @@ function renderAlertFilter() {
     return row;
   }));
 
-  // An empty selection means everything, which is less fiddly than forcing
-  // the user to tick every box to see the whole queue.
   const chosen = state.alerts.size;
   $('#alertsel').textContent =
-    chosen === 0 ? 'All' : chosen === 1 ? [...state.alerts][0] : `${chosen} selected`;
+    chosen === 0 ? 'None'
+    : chosen === counts.size ? 'All'
+    : chosen === 1 ? [...state.alerts][0]
+    : `${chosen} of ${counts.size}`;
 }
 
 function visiblePending() {
   const papers = state.pending || [];
-  if (!state.alerts.size) return papers;
+  // Only one alert: there is no filter to apply, and the group is hidden.
+  if (alertCounts().size < 2) return papers;
   return papers.filter(p => state.alerts.has(alertOf(p)));
 }
 
 function renderTriage() {
+  renderAlertFilter();
   const shown = visiblePending();
   $('#list').replaceChildren(...shown.map(triageCard));
+
+  const nothingChosen = alertCounts().size > 1 && state.alerts.size === 0;
   $('#empty').hidden = shown.length > 0;
-  renderAlertFilter();
+  $('#empty').textContent = nothingChosen
+    ? 'No alerts selected. Tick one at the left, or press All.'
+    : (state.pending || []).length
+      ? 'Nothing left in this selection.'
+      : 'Nothing to triage. Press Check now.';
 }
 
 async function loadTriage() {
@@ -1018,15 +1037,12 @@ function showNotice(msg) {
 // ---------- sidebar ----------
 
 $('#fg-alerts').querySelector('[data-all]').addEventListener('click', () => {
-  state.alerts.clear();          // empty means all
+  state.alerts = new Set(alertCounts().keys());
   renderTriage();
 });
 
 $('#fg-alerts').querySelector('[data-none]').addEventListener('click', () => {
-  // Ticking nothing would show everything, so "None" selects the busiest
-  // alert alone rather than producing an empty screen.
-  const entries = [...alertCounts()].sort((a, b) => b[1] - a[1]);
-  state.alerts = new Set(entries.length ? [entries[0][0]] : []);
+  state.alerts.clear();
   renderTriage();
 });
 
