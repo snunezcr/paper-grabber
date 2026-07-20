@@ -10,10 +10,13 @@ from pathlib import Path
 
 from .cache import LookupCache
 from .drive import DriveClient, DriveError
+from .gmail import ALERT_SENDERS, GmailClient, GmailError
+from .ledger import Decision, Ledger
 from .google_auth import (
     DEFAULT_CREDENTIALS,
     DEFAULT_TOKEN,
     DRIVE_SCOPES,
+    GMAIL_SCOPES,
     AuthError,
     load_credentials,
 )
@@ -164,6 +167,83 @@ def cmd_download(args) -> int:
     return 0
 
 
+DEFAULT_LEDGER = Path.home() / ".local" / "share" / "paper-grabber" / "state.db"
+
+
+def cmd_sync(args) -> int:
+    """Pull new Scholar alerts from Gmail into the ledger.
+
+    Messages already processed are skipped, and papers already decided are not
+    resurrected, so running this twice in a row is a no-op.
+    """
+    try:
+        creds = load_credentials(
+            credentials_path=args.credentials,
+            token_path=args.token,
+            scopes=GMAIL_SCOPES,
+            allow_interactive=not args.non_interactive,
+        )
+    except AuthError as exc:
+        print(f"authorisation failed: {exc}", file=sys.stderr)
+        return 2
+
+    gmail = GmailClient(creds)
+    with Ledger(args.ledger) as ledger:
+        seen = ledger.seen_message_ids()
+        new_papers = repeats = messages = 0
+
+        try:
+            for msg in gmail.fetch_alerts(
+                newer_than_days=args.days, skip=seen, limit=args.limit
+            ):
+                messages += 1
+                for paper in dedupe(parse_alert_email(msg.raw)):
+                    if ledger.record(paper):
+                        new_papers += 1
+                    else:
+                        repeats += 1
+                # Marked only after its papers are recorded, so an interruption
+                # re-reads the message rather than losing it.
+                ledger.mark_message(msg.message_id)
+        except GmailError as exc:
+            print(f"gmail error: {exc}", file=sys.stderr)
+            return 1
+
+        counts = ledger.counts()
+
+    print(f"{messages} new messages | {new_papers} new papers | {repeats} already known")
+    print(f"pending {counts.get('pending', 0)} | "
+          f"accepted {counts.get('accepted', 0)} | rejected {counts.get('rejected', 0)}")
+    return 0
+
+
+def cmd_pending(args) -> int:
+    """List papers awaiting triage."""
+    with Ledger(args.ledger) as ledger:
+        rows = ledger.pending()
+        for p in rows:
+            d = p.payload
+            year = d.get("year") or "????"
+            authors = ", ".join(d.get("authors") or []) or "(no authors)"
+            print(f"{year}  {p.title}")
+            print(f"        {authors}")
+            if d.get("snippet"):
+                print(f"        {d['snippet'][:100]}")
+        print(f"\n{len(rows)} pending")
+    return 0
+
+
+def cmd_decide(args) -> int:
+    """Accept or reject a paper by title."""
+    with Ledger(args.ledger) as ledger:
+        if not ledger.known(args.title):
+            print(f"no such paper: {args.title!r}", file=sys.stderr)
+            return 1
+        ledger.decide(args.title, Decision(args.decision))
+        print(f"{args.decision}: {args.title}")
+    return 0
+
+
 def cmd_upload(args) -> int:
     """Upload staged PDFs to Drive, deleting each only once it is verified."""
     staging = StagingArea(args.staging)
@@ -251,6 +331,25 @@ def main(argv: list[str] | None = None) -> int:
     u.add_argument("--allow-duplicates", action="store_true",
                    help="upload even if a file of that name is already there")
     u.set_defaults(func=cmd_upload)
+
+    sy = sub.add_parser("sync", help="pull new Scholar alerts from Gmail")
+    sy.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
+    sy.add_argument("--days", type=int, default=2, help="how far back to search")
+    sy.add_argument("--limit", type=int, help="cap messages fetched")
+    sy.add_argument("--credentials", type=Path, default=DEFAULT_CREDENTIALS)
+    sy.add_argument("--token", type=Path, default=DEFAULT_TOKEN)
+    sy.add_argument("--non-interactive", action="store_true")
+    sy.set_defaults(func=cmd_sync)
+
+    pd = sub.add_parser("pending", help="list papers awaiting triage")
+    pd.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
+    pd.set_defaults(func=cmd_pending)
+
+    dc = sub.add_parser("decide", help="accept or reject a paper")
+    dc.add_argument("title")
+    dc.add_argument("decision", choices=[d.value for d in Decision])
+    dc.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
+    dc.set_defaults(func=cmd_decide)
 
     args = ap.parse_args(argv)
     return args.func(args)
