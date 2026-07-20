@@ -50,7 +50,18 @@ Drive has no app-password equivalent, so this part needs OAuth.
 The only scope requested is `drive.file`, which grants access **solely to files
 this app creates**. It cannot read, list, or modify anything else in your Drive.
 
-## 3. Destination folder
+## 3. Authorise Drive
+
+```bash
+paper-grabber auth
+```
+
+Opens a browser once, saves the token to `~/.config/paper-grabber/token.json`,
+and prints how many top-level folders it can see. This is the **only**
+interactive Drive step: `serve` and `upload` are both non-interactive by
+design, so without running this once there is no way to create the token.
+
+## 4. Destination folder
 
 Because `drive.file` cannot look folders up by name, give the folder **ID**.
 Open the destination folder in Drive and copy the part of the URL after
@@ -84,7 +95,7 @@ paper-grabber upload \
   --folder 1AbCdEfGhIjKlMnOpQrStUvWxYz
 ```
 
-## 4. Running it daily
+## 5. Running it daily
 
 The unattended half of the pipeline — sync, enrich, fetch, upload — runs on a
 systemd **user** timer. Triage and filing are not in it: those are decisions,

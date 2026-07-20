@@ -77,9 +77,10 @@ def load_credentials(
 
     if not credentials_path.exists():
         raise AuthError(
-            f"{credentials_path} not found. Create an OAuth client ID of type "
-            '"Desktop app" in a Google Cloud project with the Gmail and Drive '
-            "APIs enabled, then download it to this path."
+            f"{credentials_path} not found. In a Google Cloud project with the "
+            'Drive API enabled, create an OAuth client ID of type "Desktop app" '
+            "and download it to this path. The Gmail API is not needed -- mail "
+            "arrives over IMAP."
         )
 
     flow = InstalledAppFlow.from_client_secrets_file(str(credentials_path), scopes)

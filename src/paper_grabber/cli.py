@@ -219,6 +219,38 @@ def cmd_sync(args) -> int:
     return 0
 
 
+def cmd_auth(args) -> int:
+    """Authorise Drive, opening a browser once.
+
+    Needed as its own command because every other Drive path is deliberately
+    non-interactive: `serve` must not open a browser on the laptop when the
+    tablet taps a folder, and `upload` short-circuits when its queue is empty.
+    Without this there is no way to create the token at all.
+    """
+    try:
+        creds = load_credentials(
+            credentials_path=args.credentials,
+            token_path=args.token,
+            scopes=DRIVE_SCOPES,
+            allow_interactive=True,
+        )
+    except AuthError as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 2
+
+    drive = DriveClient(creds)
+    try:
+        folders = drive.list_child_folders("root")
+    except DriveError as exc:
+        print(f"authorised, but Drive rejected a test call: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Drive authorised; token saved to {args.token}")
+    print(f"My Drive has {len(folders)} top-level folder(s).")
+    print("Next: open the triage UI and set a base folder under Filing.")
+    return 0
+
+
 def cmd_check_mail(args) -> int:
     """Confirm the app password works before wiring up a scheduled run."""
     try:
@@ -492,6 +524,11 @@ def main(argv: list[str] | None = None) -> int:
     sy.add_argument("--user", help="mailbox address (default: $PAPER_GRABBER_IMAP_USER)")
     sy.add_argument("--mailbox", default=GMAIL_ALL_MAIL, help="IMAP folder to search")
     sy.set_defaults(func=cmd_sync)
+
+    au = sub.add_parser("auth", help="authorise Google Drive (opens a browser once)")
+    au.add_argument("--credentials", type=Path, default=DEFAULT_CREDENTIALS)
+    au.add_argument("--token", type=Path, default=DEFAULT_TOKEN)
+    au.set_defaults(func=cmd_auth)
 
     ck = sub.add_parser("check-mail", help="verify IMAP credentials work")
     ck.add_argument("--user")

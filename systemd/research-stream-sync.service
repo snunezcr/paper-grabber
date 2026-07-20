@@ -27,7 +27,10 @@ TimeoutStartSec=30min
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%h/.local/share/paper-grabber %h/.cache/paper-grabber
+# ~/.config/paper-grabber holds the OAuth token, which is REWRITTEN on
+# refresh. Omitting it lets the job work until the first token expiry and
+# then fail permanently.
+ReadWritePaths=%h/.local/share/paper-grabber %h/.cache/paper-grabber %h/.config/paper-grabber
 NoNewPrivileges=true
 
 [Install]
