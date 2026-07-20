@@ -18,6 +18,7 @@ from .imap_source import (
     check_login,
 )
 from .ledger import Decision, Ledger
+from .models import AlertPaper
 from .google_auth import (
     DEFAULT_CREDENTIALS,
     DEFAULT_TOKEN,
@@ -228,6 +229,52 @@ def cmd_check_mail(args) -> int:
     return 0
 
 
+def cmd_enrich_pending(args) -> int:
+    """Look up pending papers on OpenAlex and store the results in the ledger.
+
+    Separate from sync because OpenAlex is metered: syncing mail is free and
+    should always work, while enrichment can be budget-limited or deferred.
+    """
+    with Ledger(args.ledger) as ledger:
+        todo = ledger.needing_enrichment()
+        if args.limit:
+            todo = todo[: args.limit]
+        if not todo:
+            print("nothing to enrich")
+            return 0
+
+        papers = [AlertPaper(**{k: v for k, v in p.payload.items()
+                                if k in AlertPaper.__dataclass_fields__}) for p in todo]
+        pairs, exhausted = _enrich_all(papers, args)
+
+        done = 0
+        for entry, (_, enrichment) in zip(todo, pairs):
+            if enrichment.note == "not looked up: budget exhausted":
+                continue
+            ledger.attach_enrichment(entry.key, enrichment.to_dict())
+            done += 1
+
+        matched = sum(1 for _, e in pairs if e.matched)
+        with_pdf = sum(1 for _, e in pairs if e.pdf_url)
+        print(f"enriched {done}/{len(todo)} | matched {matched} | fetchable {with_pdf}")
+        if exhausted:
+            print("stopped early: OpenAlex budget exhausted", file=sys.stderr)
+    return 0
+
+
+def cmd_serve(args) -> int:
+    """Run the triage web app."""
+    import uvicorn
+
+    from .server import create_app
+
+    # 0.0.0.0 by default: the whole point is reaching this from the tablet.
+    # On an untrusted network, bind 127.0.0.1 and reach it over Tailscale.
+    print(f"triage UI on http://{args.host}:{args.port}  (ledger: {args.ledger})")
+    uvicorn.run(create_app(args.ledger), host=args.host, port=args.port, log_level="warning")
+    return 0
+
+
 def cmd_pending(args) -> int:
     """List papers awaiting triage."""
     with Ledger(args.ledger) as ledger:
@@ -355,6 +402,21 @@ def main(argv: list[str] | None = None) -> int:
     ck.add_argument("--user")
     ck.add_argument("--mailbox", default=GMAIL_ALL_MAIL)
     ck.set_defaults(func=cmd_check_mail)
+
+    ep = sub.add_parser("enrich-pending", help="look up pending papers on OpenAlex")
+    ep.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
+    ep.add_argument("--limit", type=int, help="cap how many to look up")
+    ep.add_argument("--mailto", help="contact address for OpenAlex's polite pool")
+    ep.add_argument("--delay", type=float, default=0.15)
+    ep.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
+    ep.add_argument("--no-cache", action="store_true")
+    ep.set_defaults(func=cmd_enrich_pending)
+
+    sv = sub.add_parser("serve", help="run the triage web app")
+    sv.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
+    sv.add_argument("--host", default="0.0.0.0")
+    sv.add_argument("--port", type=int, default=8823)
+    sv.set_defaults(func=cmd_serve)
 
     pd = sub.add_parser("pending", help="list papers awaiting triage")
     pd.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)

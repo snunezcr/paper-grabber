@@ -116,3 +116,47 @@ def test_state_persists_across_instances(tmp_path):
     with Ledger(path) as again:
         assert again.decision_for("Quantum Error Correction") is Decision.REJECTED
         assert again.message_seen("m1")
+
+
+# --- enrichment ---------------------------------------------------------------
+
+
+def test_enrichment_attaches_to_an_existing_paper(ledger):
+    ledger.record(paper())
+    key = ledger.pending()[0].key
+    assert ledger.attach_enrichment(key, {"doi": "10.1/x", "abstract": "Real abstract."})
+    assert ledger.pending()[0].payload["enrichment"]["doi"] == "10.1/x"
+
+
+def test_enrichment_for_unknown_key_is_reported(ledger):
+    assert ledger.attach_enrichment("nosuchkey", {"doi": "10.1/x"}) is False
+
+
+def test_enrichment_does_not_disturb_the_alert_fields(ledger):
+    ledger.record(paper(authors=["A Author"], year=2026))
+    key = ledger.pending()[0].key
+    ledger.attach_enrichment(key, {"doi": "10.1/x"})
+    payload = ledger.pending()[0].payload
+    assert payload["authors"] == ["A Author"]
+    assert payload["year"] == 2026
+
+
+def test_needing_enrichment_excludes_the_enriched(ledger):
+    ledger.record(paper(title="A"))
+    ledger.record(paper(title="B"))
+    ledger.attach_enrichment(ledger.pending()[0].key, {"doi": "10.1/x"})
+    assert [p.title for p in ledger.needing_enrichment()] == ["B"]
+
+
+def test_needing_enrichment_excludes_decided_papers(ledger):
+    ledger.record(paper(title="A"))
+    ledger.decide("A", Decision.REJECTED)
+    assert ledger.needing_enrichment() == []
+
+
+def test_re_enriching_overwrites(ledger):
+    ledger.record(paper())
+    key = ledger.pending()[0].key
+    ledger.attach_enrichment(key, {"doi": "10.1/old"})
+    ledger.attach_enrichment(key, {"doi": "10.1/new"})
+    assert ledger.pending()[0].payload["enrichment"]["doi"] == "10.1/new"

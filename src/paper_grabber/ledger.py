@@ -110,13 +110,49 @@ class Ledger:
         self._db.commit()
         return True
 
-    def decide(self, title: str, decision: Decision) -> None:
-        key = normalize_title(title)
+    def attach_enrichment(self, key: str, enrichment: dict[str, Any]) -> bool:
+        """Store OpenAlex results alongside the alert record.
+
+        Kept in the same payload rather than a second table: the triage UI
+        wants one object, and enrichment is strictly additive metadata about a
+        paper we already have.
+        """
+        row = self._db.execute(
+            "SELECT payload FROM papers WHERE key = ?", (key,)
+        ).fetchone()
+        if row is None:
+            return False
+        payload = json.loads(row[0])
+        payload["enrichment"] = enrichment
         self._db.execute(
+            "UPDATE papers SET payload = ? WHERE key = ?", (json.dumps(payload), key)
+        )
+        self._db.commit()
+        return True
+
+    def needing_enrichment(self) -> list[LedgerPaper]:
+        """Pending papers that have not been looked up yet."""
+        return [p for p in self.pending() if not p.payload.get("enrichment")]
+
+    def decide(self, title: str, decision: Decision) -> None:
+        self.decide_by_key(normalize_title(title), decision)
+
+    def decide_by_key(self, key: str, decision: Decision) -> bool:
+        """Record a decision against a stored key. False if no such paper."""
+        cur = self._db.execute(
             "UPDATE papers SET decision = ?, decided_at = ? WHERE key = ?",
             (decision.value, time.time(), key),
         )
         self._db.commit()
+        return cur.rowcount > 0
+
+    def get(self, key: str) -> LedgerPaper | None:
+        row = self._db.execute(
+            "SELECT key, title, payload, decision, first_seen, decided_at"
+            " FROM papers WHERE key = ?",
+            (key,),
+        ).fetchone()
+        return self._row(row) if row else None
 
     def decision_for(self, title: str) -> Decision | None:
         row = self._db.execute(

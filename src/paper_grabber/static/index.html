@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1a1a1a">
+<link rel="manifest" href="/manifest.webmanifest">
+<title>paper-grabber</title>
+<style>
+  /* Sized for a Tab S10 held in either orientation. Touch targets are 48px
+     minimum; the accept/reject pair sits at the bottom of each card so it
+     falls under the thumb rather than at the top of a long abstract. */
+  :root {
+    --bg: #fbfbfa;
+    --card: #ffffff;
+    --ink: #1a1a1a;
+    --muted: #6b6b6b;
+    --line: #e4e4e1;
+    --accept: #1a7f4b;
+    --reject: #a33;
+    --accent: #2b5fd9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a;
+      --card: #202225;
+      --ink: #eceff1;
+      --muted: #9aa0a6;
+      --line: #303338;
+      --accept: #4ec27f;
+      --reject: #e2726e;
+      --accent: #7aa2f7;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  header {
+    position: sticky; top: 0; z-index: 5;
+    display: flex; align-items: baseline; gap: .75rem;
+    padding: .9rem 1rem calc(.9rem + env(safe-area-inset-top));
+    background: var(--bg); border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 1.05rem; margin: 0; font-weight: 600; letter-spacing: -.01em; }
+  #counts { color: var(--muted); font-size: .85rem; font-variant-numeric: tabular-nums; }
+  main { max-width: 46rem; margin: 0 auto; padding: 1rem 1rem 6rem; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 1rem; margin-bottom: 1rem;
+  }
+  .card.going { opacity: .35; transform: scale(.99); transition: opacity .18s, transform .18s; }
+  .title { font-size: 1.08rem; font-weight: 600; margin: 0 0 .35rem; line-height: 1.35; }
+  .meta { color: var(--muted); font-size: .87rem; margin-bottom: .6rem; }
+  .abstract { font-size: .94rem; margin: 0 0 .5rem; }
+  .abstract.clamped {
+    display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .more {
+    background: none; border: 0; color: var(--accent); padding: .25rem 0;
+    font-size: .88rem; cursor: pointer; min-height: 32px;
+  }
+  .tags { display: flex; flex-wrap: wrap; gap: .4rem; margin: .6rem 0 .9rem; }
+  .tag {
+    font-size: .74rem; padding: .18rem .5rem; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted);
+  }
+  .tag.pdf { color: var(--accept); border-color: currentColor; }
+  .tag.snippet { color: var(--muted); font-style: italic; }
+
+  .actions { display: flex; gap: .6rem; }
+  .actions button {
+    flex: 1; min-height: 48px; border-radius: 10px; font-size: .95rem;
+    font-weight: 600; cursor: pointer; border: 1px solid var(--line);
+    background: var(--card); color: var(--ink);
+  }
+  .actions .yes { border-color: var(--accept); color: var(--accept); }
+  .actions .no  { border-color: var(--reject); color: var(--reject); }
+  .actions a.open {
+    flex: 0 0 auto; min-height: 48px; display: flex; align-items: center;
+    padding: 0 .9rem; border: 1px solid var(--line); border-radius: 10px;
+    color: var(--accent); text-decoration: none; font-size: .9rem;
+  }
+
+  #empty, #error { text-align: center; color: var(--muted); padding: 3rem 1rem; }
+  #error { color: var(--reject); }
+  #undo {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(1.2rem + env(safe-area-inset-bottom));
+    background: var(--ink); color: var(--bg); border: 0; border-radius: 999px;
+    padding: .7rem 1.2rem; font-size: .9rem; min-height: 44px; cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0,0,0,.22);
+  }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>paper-grabber</h1>
+  <span id="counts"></span>
+</header>
+
+<main>
+  <div id="list"></div>
+  <div id="empty" hidden>Nothing to triage. Run <code>paper-grabber sync</code>.</div>
+  <div id="error" hidden></div>
+</main>
+
+<button id="undo" hidden>Undo</button>
+
+<script>
+const list = document.getElementById('list');
+const countsEl = document.getElementById('counts');
+const emptyEl = document.getElementById('empty');
+const errorEl = document.getElementById('error');
+const undoEl = document.getElementById('undo');
+
+let lastAction = null;
+
+function showCounts(c) {
+  const pending = c.pending || 0, acc = c.accepted || 0, rej = c.rejected || 0;
+  countsEl.textContent = `${pending} pending · ${acc} accepted · ${rej} rejected`;
+}
+
+function card(p) {
+  const el = document.createElement('article');
+  el.className = 'card';
+  el.dataset.key = p.key;
+
+  const meta = [p.authors.join(', '), p.venue, p.year].filter(Boolean).join(' · ');
+
+  const tags = [];
+  if (p.has_pdf) tags.push('<span class="tag pdf">PDF available</span>');
+  if (p.abstract_is_snippet) tags.push('<span class="tag snippet">snippet, not abstract</span>');
+  if (p.alert_query) tags.push(`<span class="tag">${esc(p.alert_query)}</span>`);
+  if (p.doi) tags.push(`<span class="tag">${esc(p.doi)}</span>`);
+
+  el.innerHTML = `
+    <h2 class="title">${esc(p.title)}</h2>
+    <div class="meta">${esc(meta) || '&nbsp;'}</div>
+    <p class="abstract clamped">${esc(p.abstract || 'No abstract or snippet available.')}</p>
+    <button class="more" hidden>Show more</button>
+    <div class="tags">${tags.join('')}</div>
+    <div class="actions">
+      <button class="yes">Interesting</button>
+      <button class="no">Skip</button>
+      ${p.url ? `<a class="open" href="${esc(p.url)}" target="_blank" rel="noopener">Open</a>` : ''}
+    </div>`;
+
+  const abs = el.querySelector('.abstract');
+  const more = el.querySelector('.more');
+  // Only offer "show more" when the text is actually clipped.
+  requestAnimationFrame(() => {
+    if (abs.scrollHeight > abs.clientHeight + 4) more.hidden = false;
+  });
+  more.addEventListener('click', () => {
+    abs.classList.toggle('clamped');
+    more.textContent = abs.classList.contains('clamped') ? 'Show more' : 'Show less';
+  });
+
+  el.querySelector('.yes').addEventListener('click', () => decide(el, p, 'accepted'));
+  el.querySelector('.no').addEventListener('click', () => decide(el, p, 'rejected'));
+  return el;
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
+  ));
+}
+
+async function decide(el, paper, decision) {
+  el.classList.add('going');
+  try {
+    const r = await fetch(`/api/papers/${encodeURIComponent(paper.key)}/decision`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({decision})
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    showCounts(data.counts);
+    setTimeout(() => {
+      el.remove();
+      if (!list.children.length) emptyEl.hidden = false;
+    }, 180);
+    // Reversing a decision is one tap; a mis-tap on a tablet is common and
+    // an accidental reject would otherwise be invisible forever.
+    lastAction = {paper, previous: 'pending'};
+    undoEl.hidden = false;
+  } catch (e) {
+    el.classList.remove('going');
+    showError(`Could not record decision: ${e.message}`);
+  }
+}
+
+undoEl.addEventListener('click', async () => {
+  if (!lastAction) return;
+  const {paper} = lastAction;
+  try {
+    const r = await fetch(`/api/papers/${encodeURIComponent(paper.key)}/decision`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({decision: 'pending'})
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    showCounts(data.counts);
+    emptyEl.hidden = true;
+    list.prepend(card(paper));
+    lastAction = null;
+    undoEl.hidden = true;
+  } catch (e) {
+    showError(`Could not undo: ${e.message}`);
+  }
+});
+
+function showError(msg) {
+  errorEl.textContent = msg;
+  errorEl.hidden = false;
+  setTimeout(() => { errorEl.hidden = true; }, 4000);
+}
+
+async function load() {
+  try {
+    const r = await fetch('/api/pending');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    showCounts(data.counts);
+    list.replaceChildren(...data.papers.map(card));
+    emptyEl.hidden = data.papers.length > 0;
+  } catch (e) {
+    showError(`Could not load papers: ${e.message}`);
+  }
+}
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+load();
+</script>
+</body>
+</html>
