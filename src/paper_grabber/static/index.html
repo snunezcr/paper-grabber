@@ -367,8 +367,12 @@
     border-left: 3px solid var(--accent); background: var(--bg);
     border-radius: 0 8px 8px 0; white-space: pre-wrap; overflow-wrap: anywhere;
   }
-  .filed-actions .note { flex: 0 0 auto; padding: 0 .9rem; }
+  /* Note and Cite are the pair pushed right. Whichever comes first in the
+     row takes the auto margin; the second sits against it rather than being
+     pushed to a second gap of its own. */
+  .filed-actions .note,
   .filed-actions .cite { flex: 0 0 auto; padding: 0 .9rem; margin-left: auto; }
+  .filed-actions .note + .cite { margin-left: 0; }
   .filed-actions .suggest {
     flex: 0 0 auto; padding: 0 .9rem; font-size: .87rem;
     border-color: var(--accent); color: var(--accent);
@@ -882,8 +886,8 @@ function filingCard(p, {selectable}) {
     const hint = state.suggestions?.[p.key];
     actions.innerHTML = `
       ${hint ? `<button class="suggest" title="${esc(hint.reason)}">File to ${esc(hint.folder_name)}</button>` : ''}
-      <button class="note">${p.note ? 'Note ✓' : 'Note'}</button>
       <span class="cardstatus" hidden></span>
+      <button class="note">${p.note ? 'Note ✓' : 'Note'}</button>
       <button class="cite">Cite</button>`;
     actions.querySelector('.note').addEventListener('click', () => editNote(p));
     if (hint) {
@@ -907,8 +911,8 @@ function filingCard(p, {selectable}) {
       actions.innerHTML = `
         <button class="up">Upload</button>
         <button class="unfile">Not yet</button>
-        <button class="note">${p.note ? 'Note ✓' : 'Note'}</button>
         <span class="cardstatus" hidden></span>
+        <button class="note">${p.note ? 'Note ✓' : 'Note'}</button>
         <button class="cite">Cite</button>`;
       actions.querySelector('.note').addEventListener('click', () => editNote(p));
       actions.querySelector('.up').addEventListener('click', () => uploadOne(p, el));

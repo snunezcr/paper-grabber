@@ -866,6 +866,22 @@ def test_cite_comes_last_in_every_action_row(client):
                 assert seg.index('class="cite"') > seg.index("cardstatus")
 
 
+def test_note_sits_immediately_before_cite(client):
+    body = client.get("/").text
+    filing = body.split("function filingCard")[1].split("\nasync function")[0]
+    rows = [seg for seg in filing.split("innerHTML") if 'class="note"' in seg]
+    assert rows, "no filing row offers a note"
+    for seg in rows:
+        # Adjacent and both to the right of the status, so they read as a pair.
+        assert seg.index('class="note"') < seg.index('class="cite"')
+        assert seg.index("cardstatus") < seg.index('class="note"')
+
+
+def test_note_and_cite_are_pushed_right_as_a_pair(client):
+    body = client.get("/").text
+    assert ".filed-actions .note + .cite { margin-left: 0; }" in body
+
+
 # --- search -------------------------------------------------------------------
 
 
