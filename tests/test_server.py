@@ -1181,3 +1181,25 @@ def test_check_now_is_green_like_upload(client):
 
 def test_interesting_uses_a_tick(client):
     assert "iconBtn('yes', 'check'" in client.get("/").text
+
+
+def test_card_icon_buttons_share_one_size(client):
+    # Per-button padding overrides had made Note narrower than Cite, Check and
+    # Recover, so a row of icons read as mismatched.
+    import re
+
+    body = client.get("/").text
+    assert ".filed-actions .iconbtn { flex: 0 0 auto; min-width: 44px; padding: 0; }" in body
+    assert not re.findall(r"\.filed-actions \.(cite|verify|recover|note) \{[^}]*padding", body)
+
+
+def test_only_the_trailing_pair_is_right_aligned(client):
+    body = client.get("/").text
+    # Note takes the auto margin when present, Cite when it is alone.
+    assert ".filed-actions .note,\n  .filed-actions .cite { margin-left: auto; }" in body
+    assert ".filed-actions .note ~ .cite { margin-left: 0; }" in body
+    # The primary actions stay at the left.
+    for name in (".up", ".unfile", ".suggest", ".verify"):
+        rule_start = body.find(f".filed-actions {name} {{")
+        if rule_start != -1:
+            assert "margin-left: auto" not in body[rule_start:body.index("}", rule_start)]

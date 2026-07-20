@@ -42,8 +42,6 @@
     background: none; color: var(--reject); font-size: .88rem; font-weight: 600;
   }
   #rejectedbtn[aria-pressed="true"] { background: var(--reject); color: #fff; }
-  .filed-actions .recover { flex: 0 0 auto; padding: 0 .9rem;
-    border-color: var(--accept); color: var(--accept); }
 
   /* Green, matching Upload: both are the affirmative action of their view. */
   #check { min-height: 40px; padding: 0 .75rem; cursor: pointer;
@@ -278,9 +276,19 @@
   /* Interesting and Skip stay wide: they are the whole point of a triage
      card, and shrinking them to 44px would put the two decisions in a corner. */
   .actions .yes, .actions .no { flex: 1; }
+  /* One size for every icon button on a card, so the row reads as a set
+     rather than as buttons that happen to sit together. */
+  .filed-actions .iconbtn { flex: 0 0 auto; min-width: 44px; padding: 0; }
+
+  /* Only the trailing pair is right-aligned. Whichever of them comes first
+     takes the auto margin; the other sits against it. */
+  .filed-actions .note,
+  .filed-actions .cite { margin-left: auto; }
+  .filed-actions .note ~ .cite { margin-left: 0; }
+
   .filed-actions .note.has-note { border-color: var(--accent); color: var(--accent); }
+  .filed-actions .recover { border-color: var(--accept); color: var(--accept); }
   #filebar .iconbtn { padding: 0 .9rem; }
-  .filed-actions .verify { flex: 0 0 auto; padding: 0 .9rem; }
   .filed-actions .cardstatus {
     display: inline-flex; align-items: center; font-size: .85rem;
     color: var(--muted); padding-left: .3rem;
@@ -392,7 +400,6 @@
     background: var(--accent); color: #fff;
   }
 
-  .filed-actions .cite { flex: 0 0 auto; padding: 0 .9rem; margin-left: auto; }
   .filed-actions .note + .cite { margin-left: 0; }
   .filed-actions .suggest {
     flex: 0 0 auto; padding: 0 .9rem; font-size: .87rem;
