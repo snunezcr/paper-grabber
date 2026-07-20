@@ -9,11 +9,19 @@ import time
 from pathlib import Path
 
 from .cache import LookupCache
+from .drive import DriveClient, DriveError
+from .google_auth import (
+    DEFAULT_CREDENTIALS,
+    DEFAULT_TOKEN,
+    DRIVE_SCOPES,
+    AuthError,
+    load_credentials,
+)
 from .enrich import Enrichment, OpenAlexClient, RateLimited, direct_pdf_url
 from .fetch import download_first_available, make_client
 from .filename import deduplicate_filename, pdf_filename
 from .parse import dedupe, parse_alert_email
-from .staging import StagingArea
+from .staging import StagingArea, VerificationError
 
 
 def _load(paths: list[Path], *, do_dedupe: bool = True):
@@ -156,6 +164,56 @@ def cmd_download(args) -> int:
     return 0
 
 
+def cmd_upload(args) -> int:
+    """Upload staged PDFs to Drive, deleting each only once it is verified."""
+    staging = StagingArea(args.staging)
+    pending = staging.pending()
+    if not pending:
+        print(f"nothing staged in {staging.root}")
+        return 0
+
+    try:
+        creds = load_credentials(
+            credentials_path=args.credentials,
+            token_path=args.token,
+            scopes=DRIVE_SCOPES,
+            allow_interactive=not args.non_interactive,
+        )
+    except AuthError as exc:
+        print(f"authorisation failed: {exc}", file=sys.stderr)
+        return 2
+
+    drive = DriveClient(creds)
+    try:
+        folder_id = drive.resolve_folder(args.folder)
+    except DriveError as exc:
+        print(f"could not resolve --folder: {exc}", file=sys.stderr)
+        return 2
+
+    uploaded = kept = 0
+    for path in pending:
+        try:
+            if not args.allow_duplicates and drive.exists_in_folder(path.name, folder_id):
+                print(f"SKIP  already in Drive: {path.name}")
+                continue
+
+            remote = drive.upload(path, folder_id=folder_id)
+            staging.confirm(path, remote)
+            uploaded += 1
+            print(f"UPLOADED  {path.name}")
+        except VerificationError as exc:
+            # The remote copy could not be proven identical, so the local file
+            # stays put. This is the safe outcome, not a lost paper.
+            kept += 1
+            print(f"UNVERIFIED (kept locally)  {exc}", file=sys.stderr)
+        except DriveError as exc:
+            kept += 1
+            print(f"FAILED (kept locally)  {exc}", file=sys.stderr)
+
+    print(f"\nuploaded {uploaded} | kept locally {kept} | still staged {len(staging.pending())}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="paper-grabber")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -182,6 +240,17 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     d.add_argument("--no-cache", action="store_true")
     d.set_defaults(func=cmd_download)
+
+    u = sub.add_parser("upload", help="upload staged PDFs to Drive, then remove them")
+    u.add_argument("--staging", type=Path, required=True, help="staging directory")
+    u.add_argument("--folder", required=True, help="Drive folder ID or path, e.g. Research/Papers")
+    u.add_argument("--credentials", type=Path, default=DEFAULT_CREDENTIALS)
+    u.add_argument("--token", type=Path, default=DEFAULT_TOKEN)
+    u.add_argument("--non-interactive", action="store_true",
+                   help="never open a browser; fail if no token exists")
+    u.add_argument("--allow-duplicates", action="store_true",
+                   help="upload even if a file of that name is already there")
+    u.set_defaults(func=cmd_upload)
 
     args = ap.parse_args(argv)
     return args.func(args)
