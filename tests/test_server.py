@@ -816,12 +816,23 @@ def test_bibtex_for_an_unknown_paper_is_404(client):
     assert client.get("/api/papers/nope/bibtex").status_code == 404
 
 
-def test_cite_button_is_on_filing_and_processed_cards_only(client):
+def test_cite_button_is_on_every_filing_and_processed_card(client):
     body = client.get("/").text
-    # Present in the filing and processed renderers...
-    assert body.count('class="cite"') >= 2
-    # ...but the triage card offers only the two decisions.
-    triage = body.split("function triageCard")[1].split("function ")[0]
+    filing = body.split("function filingCard")[1].split("\nasync function")[0]
+    selectable = filing.split("if (selectable) {")[1].split("} else {")[0]
+    ready = filing.split("} else {")[1]
+    processed = body.split("function processedCard")[1].split("\nasync function")[0]
+
+    # A card awaiting a destination still deserves a citation: wanting the
+    # reference has nothing to do with having decided where the PDF goes.
+    assert "cite" in selectable
+    assert "cite" in ready
+    assert "cite" in processed
+
+
+def test_triage_cards_have_no_cite_button(client):
+    body = client.get("/").text
+    triage = body.split("function triageCard")[1].split("\nasync function")[0]
     assert "cite" not in triage
 
 

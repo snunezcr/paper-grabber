@@ -705,6 +705,17 @@ function filingCard(p, {selectable}) {
       box.checked ? state.selected.add(p.key) : state.selected.delete(p.key);
       refreshFileBar();
     });
+
+    // Every card in Filing offers a citation, whether or not a destination
+    // has been chosen yet -- wanting the reference has nothing to do with
+    // having decided where the PDF goes.
+    const actions = document.createElement('div');
+    actions.className = 'actions filed-actions';
+    actions.innerHTML = `
+      <button class="cite">Cite</button>
+      <span class="cardstatus" hidden></span>`;
+    actions.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
+    el.querySelector('.pick > div:last-child').appendChild(actions);
   } else {
     // A filed paper can be sent to Drive, or put back in the queue if the
     // destination was wrong. Once uploaded neither applies.
