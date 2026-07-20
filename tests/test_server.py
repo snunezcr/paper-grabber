@@ -748,3 +748,12 @@ def test_venue_label_falls_back_to_host(seeded):
 
 def test_page_labels_the_link_with_the_venue(client):
     assert "p.source_label" in client.get("/").text
+
+
+def test_sidebar_sticks_at_the_measured_header_height(client):
+    # A hardcoded offset makes the sidebar drift upward on the first scroll,
+    # because the header's height varies with the sign-in bar and wrapping.
+    body = client.get("/").text
+    assert "top: var(--header-h" in body
+    assert "syncHeaderHeight" in body
+    assert "ResizeObserver" in body

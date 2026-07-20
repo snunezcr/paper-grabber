@@ -82,9 +82,13 @@
      spare nor the patience for a cramped two-column layout. */
   #shell { display: flex; gap: 0; align-items: flex-start; }
   #sidebar {
-    flex: 0 0 15rem; position: sticky; top: 6.5rem;
-    padding: 1rem .75rem 1rem 1rem; align-self: flex-start;
-    max-height: calc(100vh - 7rem); overflow-y: auto;
+    flex: 0 0 15rem; align-self: flex-start;
+    /* Sticks at the header's measured height, so it is already in its
+       resting place on the first pixel of scroll. A guessed offset makes it
+       drift upwards until the guess is reached. */
+    position: sticky; top: var(--header-h, 6.5rem);
+    padding: 1rem .75rem 1rem 1rem;
+    max-height: calc(100vh - var(--header-h, 6.5rem)); overflow-y: auto;
   }
   #filtertoggle { display: none; }
 
@@ -1062,6 +1066,23 @@ function showNotice(msg) {
 }
 
 // ---------- sidebar ----------
+
+// The header's height changes: the sign-in bar appears and disappears, and
+// the counts line wraps on narrow screens. Measuring it keeps the sidebar
+// flush instead of drifting to a hardcoded offset.
+const headerEl = document.querySelector('header');
+
+function syncHeaderHeight() {
+  const h = headerEl.getBoundingClientRect().height;
+  document.documentElement.style.setProperty('--header-h', `${Math.round(h)}px`);
+}
+
+if (window.ResizeObserver) {
+  new ResizeObserver(syncHeaderHeight).observe(headerEl);
+} else {
+  window.addEventListener('resize', syncHeaderHeight);
+}
+syncHeaderHeight();
 
 $('#fg-alerts').querySelector('[data-all]').addEventListener('click', () => {
   state.alerts = new Set(alertCounts().keys());
