@@ -974,3 +974,65 @@ def test_bulk_rejection_offers_an_undo(client):
     # would bury them silently.
     body = client.get("/").text
     assert "state.lastUndo = {keys:" in body
+
+
+# --- rejected view and recovery -----------------------------------------------
+
+
+def test_rejected_endpoint_lists_rejected_papers(app_client, seeded):
+    accept_all(app_client)
+    keys = [p["key"] for p in app_client.get("/api/accepted").json()["unfiled"]]
+    app_client.post("/api/decisions", json={"keys": keys, "decision": "rejected"})
+    papers = app_client.get("/api/rejected").json()["papers"]
+    assert len(papers) == len(keys)
+
+
+def test_rejected_starts_empty(app_client):
+    assert app_client.get("/api/rejected").json()["papers"] == []
+
+
+def test_recovering_returns_a_paper_to_filing(app_client, seeded):
+    accept_all(app_client)
+    key = app_client.get("/api/accepted").json()["unfiled"][0]["key"]
+    app_client.post("/api/decisions", json={"keys": [key], "decision": "rejected"})
+    assert any(p["key"] == key for p in app_client.get("/api/rejected").json()["papers"])
+
+    # Recovery goes to accepted, not pending: it was judged interesting once.
+    app_client.post("/api/decisions", json={"keys": [key], "decision": "accepted"})
+    assert all(p["key"] != key for p in app_client.get("/api/rejected").json()["papers"])
+    assert any(p["key"] == key
+               for p in app_client.get("/api/accepted").json()["unfiled"])
+
+
+def test_recovered_paper_does_not_return_to_triage(app_client, seeded):
+    accept_all(app_client)
+    key = app_client.get("/api/accepted").json()["unfiled"][0]["key"]
+    app_client.post("/api/decisions", json={"keys": [key], "decision": "rejected"})
+    app_client.post("/api/decisions", json={"keys": [key], "decision": "accepted"})
+    assert all(p["key"] != key for p in app_client.get("/api/pending").json()["papers"])
+
+
+def test_rejected_button_sits_left_of_check_now(client):
+    import re
+
+    bar = client.get("/").text.split('<div class="titlebar">')[1].split("</div>")[0]
+    assert re.findall(r'id="(rejectedbtn|check)"', bar) == ["rejectedbtn", "check"]
+
+
+def test_rejected_button_uses_the_palette_reject_colour(client):
+    rule = client.get("/").text.split("#rejectedbtn {")[1].split("}")[0]
+    assert "var(--reject)" in rule
+
+
+def test_rejected_view_and_recover_button_exist(client):
+    body = client.get("/").text
+    assert 'id="view-rejected"' in body
+    assert 'class="recover"' in body
+    assert "recoverOne" in body
+
+
+def test_rejected_is_not_a_tab(client):
+    # It is reached from the header, so no tab should be selected while it
+    # is showing.
+    body = client.get("/").text
+    assert "$('#view-rejected').hidden = tab !== 'rejected';" in body

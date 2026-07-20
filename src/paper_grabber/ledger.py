@@ -301,6 +301,16 @@ class Ledger:
         rows = self._db.execute(sql, (Decision.ACCEPTED.value,)).fetchall()
         return [self._row(r) for r in rows]
 
+    def rejected(self) -> list[LedgerPaper]:
+        """Rejected papers, most recently rejected first."""
+        rows = self._db.execute(
+            "SELECT key, title, payload, decision, first_seen, decided_at,"
+            " dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at"
+            " FROM papers WHERE decision = ? ORDER BY decided_at DESC",
+            (Decision.REJECTED.value,),
+        ).fetchall()
+        return [self._row(r) for r in rows]
+
     def processed(self) -> list[LedgerPaper]:
         """Papers safely in Drive, most recent first."""
         rows = self._db.execute(

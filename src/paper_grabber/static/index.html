@@ -35,8 +35,18 @@
     padding: calc(.6rem + env(safe-area-inset-top)) 1rem .3rem;
   }
   .titlebar { display: flex; align-items: center; gap: .75rem; }
-  #check {
+  #rejectedbtn {
     margin-left: auto; min-height: 40px; padding: 0 .9rem; cursor: pointer;
+    display: inline-flex; align-items: center; white-space: nowrap;
+    border: 1px solid var(--reject); border-radius: 8px;
+    background: none; color: var(--reject); font-size: .88rem; font-weight: 600;
+  }
+  #rejectedbtn[aria-pressed="true"] { background: var(--reject); color: #fff; }
+  #rejectedbtn .badge { background: none; color: inherit; }
+  .filed-actions .recover { flex: 0 0 auto; padding: 0 .9rem;
+    border-color: var(--accept); color: var(--accept); }
+
+  #check { min-height: 40px; padding: 0 .9rem; cursor: pointer;
     display: inline-flex; align-items: center; gap: .45rem; white-space: nowrap;
     border: 1px solid var(--accent); border-radius: 8px;
     background: none; color: var(--accent); font-size: .88rem; font-weight: 600;
@@ -363,6 +373,8 @@
   <div class="titlebar">
     <h1>Research Stream</h1>
     <span id="counts"></span>
+    <button id="rejectedbtn" class="danger" aria-pressed="false"
+            title="Show rejected papers">Rejected<span class="badge" id="badge-rejected">0</span></button>
     <button id="check" title="Check Gmail for new alerts now">
       <span class="spin" hidden></span><span class="label">Check now</span>
     </button>
@@ -417,6 +429,11 @@
   <section id="view-triage">
     <div id="list"></div>
     <div id="empty" hidden>Nothing to triage here. Press Check now, or pick another alert above.</div>
+  </section>
+
+  <section id="view-rejected" hidden>
+    <div id="rejected"></div>
+    <div id="norejected" class="note" hidden>Nothing rejected yet.</div>
   </section>
 
   <section id="view-processed" hidden>
@@ -479,7 +496,7 @@ let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               query: '', suggestions: {} };
 
 // Capabilities this page expects the server to have.
-const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision'];
+const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected'];
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -528,6 +545,7 @@ function showCounts(c) {
     `${c.processed || 0} in Drive`;
   $('#badge-triage').textContent = c.pending || 0;
   $('#badge-processed').textContent = c.processed || 0;
+  $('#badge-rejected').textContent = c.rejected || 0;
 }
 
 // ---------- triage ----------
@@ -1049,6 +1067,50 @@ async function verifyOne(paper, card) {
   }
 }
 
+function rejectedCard(p) {
+  const el = document.createElement('article');
+  el.className = 'card';
+  el.dataset.key = p.key;
+  el.innerHTML = cardBody(p) + `
+    <div class="actions filed-actions">
+      <span class="cardstatus" hidden></span>
+      <button class="recover">Recover</button>
+    </div>`;
+  wireAbstract(el);
+  el.querySelector('.recover').addEventListener('click', () => recoverOne(p, el));
+  return el;
+}
+
+async function recoverOne(paper, card) {
+  const button = card.querySelector('.recover');
+  button.disabled = true;
+  cardStatus(card, 'Recovering…');
+  try {
+    // Back to accepted, which is the Filing queue -- a paper being recovered
+    // has already been judged interesting once.
+    const data = await api('/api/decisions', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({keys: [paper.key], decision: 'accepted'})
+    });
+    showCounts(data.counts);
+    showNotice(`Recovered to Filing: ${paper.title.slice(0, 44)}`);
+    loadRejected();
+    loadFiling();
+  } catch (e) {
+    button.disabled = false;
+    cardStatus(card, `Could not recover: ${e.message}`, {bad: true});
+  }
+}
+
+async function loadRejected() {
+  try {
+    const data = await api('/api/rejected');
+    showCounts(data.counts);
+    $('#rejected').replaceChildren(...data.papers.map(rejectedCard));
+    $('#norejected').hidden = data.papers.length > 0;
+  } catch (e) { showError(`Could not load rejected papers: ${e.message}`); }
+}
+
 async function loadProcessed() {
   try {
     const data = await api('/api/processed');
@@ -1242,6 +1304,10 @@ function selectTab(tab) {
     $(`#tab-${name}`).setAttribute('aria-selected', tab === name);
     $(`#view-${name}`).hidden = tab !== name;
   }
+  // Rejected is reached from the header rather than the tab strip, so no tab
+  // is selected while it is showing.
+  $('#view-rejected').hidden = tab !== 'rejected';
+  $('#rejectedbtn').setAttribute('aria-pressed', String(tab === 'rejected'));
   // Undo follows whichever view produced it.
   $('#undo').hidden = !state.lastUndo
     || (state.lastUndo.keys ? tab !== 'filing' : tab !== 'triage');
@@ -1249,11 +1315,16 @@ function selectTab(tab) {
   refreshFileBar();
   if (tab === 'filing') loadFiling();
   if (tab === 'processed') loadProcessed();
+  if (tab === 'rejected') loadRejected();
 }
 
 $('#tab-triage').addEventListener('click', () => selectTab('triage'));
 $('#tab-filing').addEventListener('click', () => selectTab('filing'));
 $('#tab-processed').addEventListener('click', () => selectTab('processed'));
+$('#rejectedbtn').addEventListener('click', () => {
+  // Acts as a toggle: pressing it again returns to triage.
+  selectTab(state.tab === 'rejected' ? 'triage' : 'rejected');
+});
 
 // ---------- sign-in ----------
 
@@ -1517,6 +1588,7 @@ loadAuth();
 loadTriage();
 loadFiling();
 loadProcessed();
+loadRejected();
 </script>
 </body>
 </html>

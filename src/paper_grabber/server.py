@@ -236,6 +236,15 @@ def create_app(
                 raise HTTPException(status_code=404, detail="no such paper")
             return {"key": key, "bibtex": to_bibtex(paper_view(paper))}
 
+    @app.get("/api/rejected")
+    def rejected() -> dict[str, Any]:
+        """Papers that were rejected, so they can be recovered."""
+        with open_ledger() as led:
+            return {
+                "papers": [paper_view(p) for p in led.rejected()],
+                "counts": led.counts(),
+            }
+
     @app.get("/api/processed")
     def processed() -> dict[str, Any]:
         """Papers already in Drive."""
@@ -502,6 +511,7 @@ def create_app(
                     "bibtex",
                     "suggestions",
                     "bulk-decision",
+                    "rejected",
                 }
             ),
         }
