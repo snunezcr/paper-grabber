@@ -106,7 +106,14 @@ def paper_view(p: LedgerPaper) -> dict[str, Any]:
         "year": e.get("year") or d.get("year"),
         "abstract": abstract or d.get("snippet"),
         "abstract_is_snippet": not abstract,
+        # Kept for callers that want "wherever this paper is": the PDF when
+        # one is known, the publisher page otherwise.
         "url": e.get("pdf_url") or d.get("url"),
+        # The three distinct destinations, so a card can offer each rather
+        # than collapsing them into one link whose target is a surprise.
+        "pdf_url": e.get("pdf_url"),
+        "doi_url": f"https://doi.org/{e['doi']}" if e.get("doi") else None,
+        "source_url": e.get("landing_url") or d.get("url"),
         "alert_query": d.get("alert_query"),
         "has_pdf": bool(e.get("pdf_url")) or bool(d.get("has_pdf_badge")),
         "doi": e.get("doi"),

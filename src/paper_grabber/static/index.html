@@ -151,6 +151,17 @@
   .abstract { font-size: .94rem; margin: 0 0 .5rem; }
   .abstract.clamped { display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
   .more { background: none; border: 0; color: var(--accent); padding: .25rem 0; font-size: .88rem; cursor: pointer; min-height: 32px; }
+  .links {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .1rem .55rem;
+    margin: .45rem 0 .1rem; font-size: .88rem;
+  }
+  .links a {
+    color: var(--accent); text-decoration: none; font-weight: 600;
+    min-height: 40px; display: inline-flex; align-items: center;
+  }
+  .links a:hover { text-decoration: underline; }
+  .links .dot { color: var(--line); }
+
   .tags { display: flex; flex-wrap: wrap; gap: .4rem; margin: .6rem 0 .9rem; }
   .tag { font-size: .74rem; padding: .18rem .5rem; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
   .tag.pdf { color: var(--accept); border-color: currentColor; }
@@ -402,10 +413,26 @@ function showCounts(c) {
 
 // ---------- triage ----------
 
+function link(href, label) {
+  return href
+    ? `<a href="${esc(href)}" target="_blank" rel="noopener">${label}</a>`
+    : '';
+}
+
+function cardLinks(p) {
+  // Distinct destinations rather than one "Open" whose target depends on
+  // what enrichment happened to find.
+  const parts = [
+    link(p.pdf_url, 'PDF'),
+    link(p.doi_url, 'DOI'),
+    link(p.source_url, 'Publisher'),
+  ].filter(Boolean);
+  return parts.length ? `<div class="links">${parts.join('<span class="dot">·</span>')}</div>` : '';
+}
+
 function cardBody(p) {
   const meta = [p.authors.join(', '), p.venue, p.year].filter(Boolean).join(' · ');
   const tags = [];
-  if (p.has_pdf) tags.push('<span class="tag pdf">PDF available</span>');
   if (p.abstract_is_snippet) tags.push('<span class="tag snippet">snippet, not abstract</span>');
   if (p.alert_query) tags.push(`<span class="tag">${esc(p.alert_query)}</span>`);
   if (p.dest_folder_name) tags.push(`<span class="tag dest">→ ${esc(p.dest_folder_name)}</span>`);
@@ -414,6 +441,7 @@ function cardBody(p) {
     <div class="meta">${esc(meta) || '&nbsp;'}</div>
     <p class="abstract clamped">${esc(p.abstract || 'No abstract or snippet available.')}</p>
     <button class="more" hidden>Show more</button>
+    ${cardLinks(p)}
     <div class="tags">${tags.join('')}</div>`;
 }
 
@@ -435,7 +463,6 @@ function triageCard(p) {
     <div class="actions">
       <button class="yes">Interesting</button>
       <button class="no">Skip</button>
-      ${p.url ? `<a class="open" href="${esc(p.url)}" target="_blank" rel="noopener">Open</a>` : ''}
     </div>`;
   wireAbstract(el);
   el.querySelector('.yes').addEventListener('click', () => decide(el, p, 'accepted'));

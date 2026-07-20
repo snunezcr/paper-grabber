@@ -677,3 +677,56 @@ def test_papers_from_several_alerts_are_distinguishable(seeded):
     queries = {p["alert_query"] for p in c.get("/api/pending").json()["papers"]}
     assert "quantum programming language" in queries
     assert len(queries) >= 2
+
+
+# --- per-card links -----------------------------------------------------------
+
+
+def test_card_exposes_three_distinct_links(seeded):
+    with Ledger(seeded) as led:
+        key = normalize_title("Quantum Error Correction on FPGAs")
+        led.attach_enrichment(key, {
+            "doi": "10.1145/12345",
+            "pdf_url": "https://arxiv.org/pdf/2607.1",
+            "pdf_candidates": ["https://arxiv.org/pdf/2607.1"],
+            "landing_url": "https://dl.acm.org/doi/10.1145/12345",
+        })
+    c = TestClient(create_app(seeded))
+    p = next(x for x in c.get("/api/pending").json()["papers"] if "FPGA" in x["title"])
+    assert p["pdf_url"] == "https://arxiv.org/pdf/2607.1"
+    assert p["doi_url"] == "https://doi.org/10.1145/12345"
+    assert p["source_url"] == "https://dl.acm.org/doi/10.1145/12345"
+
+
+def test_doi_becomes_a_resolvable_link(seeded):
+    with Ledger(seeded) as led:
+        led.attach_enrichment(normalize_title("Quantum Error Correction on FPGAs"),
+                              {"doi": "10.1016/j.imavis.2026.106120"})
+    c = TestClient(create_app(seeded))
+    p = next(x for x in c.get("/api/pending").json()["papers"] if "FPGA" in x["title"])
+    assert p["doi_url"] == "https://doi.org/10.1016/j.imavis.2026.106120"
+
+
+def test_paper_without_a_doi_has_no_doi_link(client):
+    papers = client.get("/api/pending").json()["papers"]
+    assert all(p["doi_url"] is None for p in papers)
+
+
+def test_publisher_link_falls_back_to_the_scholar_url(client):
+    # Only 3 of 67 real papers had a landing_url; the Scholar link is what
+    # makes this useful for the rest.
+    p = next(x for x in client.get("/api/pending").json()["papers"] if "FPGA" in x["title"])
+    assert p["source_url"] == "https://arxiv.org/pdf/1234"
+
+
+def test_page_renders_the_link_row(client):
+    body = client.get("/").text
+    assert "cardLinks" in body
+    for label in ("'PDF'", "'DOI'", "'Publisher'"):
+        assert label in body
+
+
+def test_links_open_in_a_new_tab_safely(client):
+    # target=_blank without noopener hands the opener to the destination.
+    body = client.get("/").text
+    assert 'target="_blank" rel="noopener"' in body
