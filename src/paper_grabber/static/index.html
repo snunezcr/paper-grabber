@@ -77,6 +77,22 @@
 
   main { max-width: 46rem; margin: 0 auto; padding: 1rem 1rem 7rem; }
 
+  #alertfilter {
+    display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1rem;
+  }
+  #alertfilter button {
+    min-height: 40px; padding: 0 .75rem; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 999px;
+    background: var(--card); color: var(--muted);
+    font-size: .85rem; font-weight: 600; white-space: nowrap;
+  }
+  #alertfilter button[aria-pressed="true"] {
+    border-color: var(--accent); color: var(--accent);
+  }
+  #alertfilter button .n {
+    margin-left: .4rem; font-variant-numeric: tabular-nums; opacity: .8;
+  }
+
   .card {
     background: var(--card); border: 1px solid var(--line); border-radius: 12px;
     padding: 1rem; margin-bottom: 1rem;
@@ -215,8 +231,9 @@
   <div id="notice" hidden></div>
 
   <section id="view-triage">
+    <div id="alertfilter" hidden></div>
     <div id="list"></div>
-    <div id="empty" hidden>Nothing to triage. Run <code>paper-grabber sync</code>.</div>
+    <div id="empty" hidden>Nothing to triage here. Press Check now, or pick another alert above.</div>
   </section>
 
   <section id="view-processed" hidden>
@@ -264,7 +281,8 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-let state = { tab: 'triage', selected: new Set(), base: null, sheet: null };
+let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
+              pending: [], filter: null };
 
 // Capabilities this page expects the server to have.
 const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check'];
@@ -369,9 +387,12 @@ async function decide(el, paper, decision) {
       body: JSON.stringify({decision})
     });
     showCounts(data.counts);
+    state.pending = (state.pending || []).filter(x => x.key !== paper.key);
     setTimeout(() => {
       el.remove();
       $('#empty').hidden = $('#list').children.length > 0;
+      // Counts on the chips must follow the list, or the filter lies.
+      renderAlertFilter();
     }, 180);
     // Reversing a decision must be one tap: a mis-tap is easy on a tablet, and
     // a rejected paper is suppressed on every future sync -- invisible forever.
@@ -393,20 +414,78 @@ $('#undo').addEventListener('click', async () => {
       body: JSON.stringify({decision: 'pending'})
     });
     showCounts(data.counts);
+    state.pending = [paper, ...(state.pending || [])];
     $('#empty').hidden = true;
-    $('#list').prepend(triageCard(paper));
+    // Re-render rather than prepend: an undone paper may belong to a filter
+    // that is not currently showing.
+    renderTriage();
     state.lastUndo = null;
     $('#undo').hidden = true;
     loadFiling();
   } catch (e) { showError(`Could not undo: ${e.message}`); }
 });
 
+const NO_ALERT = '(no alert)';
+
+function alertOf(p) {
+  return p.alert_query || NO_ALERT;
+}
+
+function renderAlertFilter() {
+  const wrap = $('#alertfilter');
+  const papers = state.pending || [];
+  const counts = new Map();
+  for (const p of papers) counts.set(alertOf(p), (counts.get(alertOf(p)) || 0) + 1);
+
+  // One alert is not a choice; showing a single chip is just clutter.
+  if (counts.size < 2) {
+    wrap.hidden = true;
+    state.filter = null;
+    return;
+  }
+
+  // A filter whose papers are all gone would leave an empty list and no way
+  // back except finding the All chip.
+  if (state.filter && !counts.has(state.filter)) state.filter = null;
+
+  const chips = [['', 'All', papers.length]];
+  // Busiest first: the noisy query is the one worth isolating.
+  for (const [name, n] of [...counts].sort((a, b) => b[1] - a[1])) {
+    chips.push([name, name, n]);
+  }
+
+  wrap.replaceChildren(...chips.map(([value, label, n]) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.setAttribute('aria-pressed', String((state.filter || '') === value));
+    b.innerHTML = `${esc(label)}<span class="n">${n}</span>`;
+    b.addEventListener('click', () => {
+      state.filter = value || null;
+      renderTriage();
+    });
+    return b;
+  }));
+  wrap.hidden = false;
+}
+
+function visiblePending() {
+  const papers = state.pending || [];
+  return state.filter ? papers.filter(p => alertOf(p) === state.filter) : papers;
+}
+
+function renderTriage() {
+  const shown = visiblePending();
+  $('#list').replaceChildren(...shown.map(triageCard));
+  $('#empty').hidden = shown.length > 0;
+  renderAlertFilter();
+}
+
 async function loadTriage() {
   try {
     const data = await api('/api/pending');
     showCounts(data.counts);
-    $('#list').replaceChildren(...data.papers.map(triageCard));
-    $('#empty').hidden = data.papers.length > 0;
+    state.pending = data.papers;
+    renderTriage();
   } catch (e) { showError(`Could not load papers: ${e.message}`); }
 }
 

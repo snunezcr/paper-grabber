@@ -605,3 +605,34 @@ def test_drive_only_token_does_not_use_gmail(tmp_path, monkeypatch):
     status = c.get("/api/auth/status").json()
     assert status["needs_reauth"] is True
     assert status["has_gmail"] is False
+
+
+# --- alert filter -------------------------------------------------------------
+
+
+def test_pending_payload_carries_the_alert_query(client):
+    # The filter is client-side, so it depends entirely on this field being
+    # present on every paper.
+    papers = client.get("/api/pending").json()["papers"]
+    assert all("alert_query" in p for p in papers)
+
+
+def test_page_has_the_alert_filter(client):
+    body = client.get("/").text
+    assert 'id="alertfilter"' in body
+    assert "renderAlertFilter" in body
+
+
+def test_filter_is_hidden_for_a_single_alert(client):
+    # One chip is not a choice.
+    assert "counts.size < 2" in client.get("/").text
+
+
+def test_papers_from_several_alerts_are_distinguishable(seeded):
+    with Ledger(seeded) as led:
+        led.record(AlertPaper(title="From Alert Two", year=2026,
+                              alert_query="quantum programming language"))
+    c = TestClient(create_app(seeded))
+    queries = {p["alert_query"] for p in c.get("/api/pending").json()["papers"]}
+    assert "quantum programming language" in queries
+    assert len(queries) >= 2
