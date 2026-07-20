@@ -116,6 +116,13 @@
   }
   .basefolder { color: var(--muted); font-size: .9rem; }
   .linkbtn { background: none; border: 0; color: var(--accent); cursor: pointer; font-size: .9rem; min-height: 44px; padding: 0 .25rem; }
+  .filed-actions { margin-top: .5rem; }
+  .filed-actions button { min-height: 44px; font-size: .9rem; }
+  .filed-actions .up { border-color: var(--accept); color: var(--accept); }
+  .filed-actions .done {
+    color: var(--accept); font-size: .85rem; font-weight: 600;
+    display: inline-flex; align-items: center; min-height: 44px;
+  }
   .section-label { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 1.5rem 0 .6rem; }
 
   #filebar {
@@ -384,8 +391,71 @@ function filingCard(p, {selectable}) {
       box.checked ? state.selected.add(p.key) : state.selected.delete(p.key);
       refreshFileBar();
     });
+  } else {
+    // A filed paper can be sent to Drive, or put back in the queue if the
+    // destination was wrong. Once uploaded neither applies.
+    const actions = document.createElement('div');
+    actions.className = 'actions filed-actions';
+    if (p.uploaded) {
+      actions.innerHTML = '<span class="done">In Drive</span>';
+    } else {
+      actions.innerHTML = `
+        <button class="up">Upload${p.staged ? '' : ' &amp; fetch'}</button>
+        <button class="unfile">Not yet</button>`;
+      actions.querySelector('.up').addEventListener('click', ev => uploadOne(p, ev.target));
+      actions.querySelector('.unfile').addEventListener('click', () => unfile(p));
+    }
+    el.querySelector('.pick > div:last-child').appendChild(actions);
   }
   return el;
+}
+
+async function unfile(paper) {
+  try {
+    const data = await api(`/api/papers/${encodeURIComponent(paper.key)}/unfile`, {
+      method: 'POST'
+    });
+    showCounts(data.counts);
+    showNotice(`Returned to the queue: ${paper.title.slice(0, 48)}`);
+    loadFiling();
+  } catch (e) { showError(`Could not unfile: ${e.message}`); }
+}
+
+async function uploadOne(paper, button) {
+  button.disabled = true;
+  button.textContent = 'Uploading…';
+  try {
+    await api('/api/upload', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({keys: [paper.key]})
+    });
+    pollUpload();
+  } catch (e) {
+    button.disabled = false;
+    button.textContent = 'Upload';
+    showError(`Could not start upload: ${e.message}`);
+  }
+}
+
+async function pollUpload() {
+  try {
+    const s = await api('/api/upload');
+    if (s.running) { setTimeout(pollUpload, 1500); return; }
+    const r = s.last;
+    if (r) {
+      for (const o of r.outcomes || []) {
+        const where = o.folder ? ` -> ${o.folder}` : '';
+        if (o.ok) showNotice(`${o.detail}${where}: ${o.title.slice(0, 44)}`);
+        else showError(`${o.title.slice(0, 40)}: ${o.detail}`);
+      }
+      if (r.error) showError(r.error);
+    }
+    loadFiling();
+  } catch (e) {
+    showError(`Could not read upload status: ${e.message}`);
+    loadFiling();
+  }
 }
 
 function refreshFileBar() {

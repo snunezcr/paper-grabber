@@ -30,6 +30,7 @@ from pydantic import BaseModel
 from .drive import DriveClient, DriveError
 from .google_auth import DRIVE_SCOPES, AuthError, load_credentials
 from .refresh import RefreshRunner, make_refresh_job
+from .uploader import UploadRunner, make_upload_job
 from .oauth_web import (
     CALLBACK_PATH,
     OAuthError,
@@ -69,6 +70,10 @@ class NewFolderIn(BaseModel):
     parent_id: str
 
 
+class UploadIn(BaseModel):
+    keys: list[str]
+
+
 def create_app(
     ledger_path: Path,
     *,
@@ -78,6 +83,8 @@ def create_app(
     cache_path: Path | None = None,
     mailto: str | None = None,
     refresh_days: int = 7,
+    staging_path: Path | None = None,
+    upload_runner: UploadRunner | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Research Stream", docs_url=None, redoc_url=None)
     auth = oauth or WebOAuth()
@@ -100,6 +107,8 @@ def create_app(
 
             return _Adapter()
         return ImapAlertSource(ImapConfig.from_env())
+
+    _upload: UploadRunner | None = upload_runner
 
     runner = refresh_runner or RefreshRunner(
         make_refresh_job(
@@ -189,6 +198,55 @@ def create_app(
                     "folder_name": led.get_setting(SETTING_BASE_FOLDER_NAME),
                 },
             }
+
+    @app.post("/api/papers/{key}/unfile")
+    def unfile(key: str) -> dict[str, Any]:
+        """Return a filed paper to the queue by clearing its destination."""
+        with open_ledger() as led:
+            paper = led.get(key)
+            if paper is None:
+                raise HTTPException(status_code=404, detail="no such paper")
+            if paper.drive_file_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="already uploaded to Drive; unfiling would not remove it",
+                )
+            led.set_destination(key, None, None)
+            return {"key": key, "counts": led.counts()}
+
+    @app.post("/api/upload")
+    def start_upload(body: UploadIn) -> JSONResponse:
+        """Fetch (if needed) and upload the given papers."""
+        if not body.keys:
+            raise HTTPException(status_code=400, detail="no papers given")
+
+        runner = upload_runner or UploadRunner(
+            make_upload_job(
+                ledger_path=ledger_path,
+                staging_path=staging_path or (ledger_path.parent / "staging"),
+                keys=list(body.keys),
+                drive_factory=open_drive,
+            )
+        )
+        # Rebuilt per request when not injected, because the key list differs
+        # each time; the guard against concurrent runs lives in the shared
+        # runner below.
+        nonlocal _upload
+        if upload_runner is None:
+            if _upload is not None and _upload.state().running:
+                return JSONResponse(
+                    {"started": False, **_upload.state().to_dict()}, status_code=202
+                )
+            _upload = runner
+        started, state = runner.start()
+        return JSONResponse({"started": started, **state.to_dict()}, status_code=202)
+
+    @app.get("/api/upload")
+    def upload_status() -> dict[str, Any]:
+        active = upload_runner or _upload
+        if active is None:
+            return {"running": False, "started_at": None, "last": None}
+        return active.state().to_dict()
 
     @app.post("/api/destination")
     def set_destination(body: DestinationIn) -> dict[str, Any]:

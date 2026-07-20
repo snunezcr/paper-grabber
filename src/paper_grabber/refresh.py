@@ -14,11 +14,12 @@ concurrent syncs would race on the same ledger rows.
 
 from __future__ import annotations
 
-import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
+
+from .jobs import BackgroundRunner
 
 
 @dataclass
@@ -46,80 +47,25 @@ class RefreshResult:
         return d
 
 
-@dataclass
-class RefreshState:
-    running: bool = False
-    started_at: float | None = None
-    last: RefreshResult | None = None
+class RefreshRunner(BackgroundRunner[RefreshResult]):
+    """The shared runner, specialised to a mail check."""
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "running": self.running,
-            "started_at": self.started_at,
-            "last": self.last.to_dict() if self.last else None,
-        }
+    def __init__(self, job) -> None:
+        def stamped() -> RefreshResult:
+            # Every completed run reports when it ended, whether or not the
+            # job bothered to say so.
+            result = job()
+            result.finished_at = result.finished_at or time.time()
+            return result
 
-
-class RefreshRunner:
-    """Runs a mail check on a worker thread, one at a time."""
-
-    def __init__(self, job: Callable[[], RefreshResult]) -> None:
-        self._job = job
-        self._lock = threading.Lock()
-        self._state = RefreshState()
-        self._thread: threading.Thread | None = None
-
-    def _snapshot(self) -> RefreshState:
-        """Copy the state. Caller must already hold the lock.
-
-        Separate from state() because start() needs a copy while holding the
-        lock, and threading.Lock is not reentrant -- calling state() from
-        inside the critical section deadlocks the request thread.
-        """
-        return RefreshState(
-            running=self._state.running,
-            started_at=self._state.started_at,
-            last=self._state.last,
-        )
-
-    def state(self) -> RefreshState:
-        with self._lock:
-            # Copy so a caller cannot observe a half-updated record.
-            return self._snapshot()
-
-    def start(self) -> tuple[bool, RefreshState]:
-        """Begin a run. Returns (started, state); False if one is in flight."""
-        with self._lock:
-            if self._state.running:
-                return False, self._snapshot()
-            self._state.running = True
-            self._state.started_at = time.time()
-
-        self._thread = threading.Thread(target=self._run, name="refresh", daemon=True)
-        self._thread.start()
-        return True, self.state()
-
-    def _run(self) -> None:
-        started = time.time()
-        try:
-            result = self._job()
-        except Exception as exc:  # a worker thread must never die silently
-            result = RefreshResult(
+        super().__init__(
+            stamped,
+            on_error=lambda started, exc: RefreshResult(
                 started_at=started,
                 finished_at=time.time(),
                 error=f"{type(exc).__name__}: {exc}",
-            )
-        result.finished_at = result.finished_at or time.time()
-
-        with self._lock:
-            self._state.running = False
-            self._state.last = result
-
-    def wait(self, timeout: float | None = None) -> None:
-        """Block until the current run finishes. For tests and the CLI."""
-        thread = self._thread
-        if thread is not None:
-            thread.join(timeout)
+            ),
+        )
 
 
 def make_refresh_job(
