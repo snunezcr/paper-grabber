@@ -425,7 +425,7 @@ function cardLinks(p) {
   const parts = [
     link(p.pdf_url, 'PDF'),
     link(p.doi_url, 'DOI'),
-    link(p.source_url, 'Publisher'),
+    link(p.source_url, esc(p.source_label || 'Publisher')),
   ].filter(Boolean);
   return parts.length ? `<div class="links">${parts.join('<span class="dot">·</span>')}</div>` : '';
 }

@@ -78,3 +78,50 @@ def test_clean_title_is_idempotent():
 def test_clean_title_leaves_ordinary_titles_untouched():
     t = "Qyn: FPGA-Based Quantum Error Correction with Integrated Quantum Machine Learning"
     assert clean_title(t) == t
+
+
+# --- venue labels -------------------------------------------------------------
+
+
+from paper_grabber.clean import short_venue
+
+
+@pytest.mark.parametrize("venue,expected", [
+    ("IEEE Access", "IEEE Access"),
+    ("Image and Vision Computing", "Image and Vision Computing"),
+    # Scholar truncates mid-phrase; a dangling function word reads like a bug.
+    ("ACM Transactions on", "ACM Transactions"),
+    ("Archives of Computational Methods in", "Archives of Computational"),
+    ("International Journal of Computational Intelligence and",
+     "International Journal"),
+    # Every arXiv variant is just arXiv.
+    ("arXiv preprint arXiv:2607.13699", "arXiv"),
+    ("arXiv preprint arXiv", "arXiv"),
+    ("  Digital Discovery  ", "Digital Discovery"),
+])
+def test_venue_label(venue, expected):
+    assert short_venue(venue) == expected
+
+
+def test_long_venue_is_truncated_on_a_word_boundary():
+    label = short_venue("Bulletin of the Russian Academy of Sciences: Physics")
+    assert len(label) <= 32
+    assert not label.endswith(("of", "the"))
+
+
+def test_missing_venue_falls_back_to_the_host():
+    # A quarter of alert results carry no venue at all.
+    assert short_venue(None, "https://www.researchgate.net/profile/x.pdf") == "researchgate.net"
+    assert short_venue(None, "https://books.google.com/books?id=x") == "books.google.com"
+
+
+def test_empty_venue_is_treated_as_missing():
+    assert short_venue("   ", "https://arxiv.org/pdf/1") == "arxiv.org"
+
+
+def test_nothing_known_says_publisher():
+    assert short_venue(None, None) == "Publisher"
+
+
+def test_venue_of_only_function_words_falls_through():
+    assert short_venue("of the", "https://arxiv.org/abs/1") == "arxiv.org"

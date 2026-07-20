@@ -730,3 +730,21 @@ def test_links_open_in_a_new_tab_safely(client):
     # target=_blank without noopener hands the opener to the destination.
     body = client.get("/").text
     assert 'target="_blank" rel="noopener"' in body
+
+
+def test_card_carries_a_venue_label(client):
+    p = next(x for x in client.get("/api/pending").json()["papers"] if "FPGA" in x["title"])
+    assert p["source_label"] == "Some Conference"
+
+
+def test_venue_label_falls_back_to_host(seeded):
+    with Ledger(seeded) as led:
+        led.record(AlertPaper(title="No Venue Paper", year=2026,
+                              url="https://dl.acm.org/doi/abs/10.1/x"))
+    c = TestClient(create_app(seeded))
+    p = next(x for x in c.get("/api/pending").json()["papers"] if "No Venue" in x["title"])
+    assert p["source_label"] == "dl.acm.org"
+
+
+def test_page_labels_the_link_with_the_venue(client):
+    assert "p.source_label" in client.get("/").text

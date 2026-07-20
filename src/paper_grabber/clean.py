@@ -88,3 +88,61 @@ def clean_title(title: str) -> str:
     title = unmangle_latex(title)
     title = strip_stray_quotes(title)
     return _WS_RE.sub(" ", title).strip()
+
+
+# --- venue labels -------------------------------------------------------------
+
+# Scholar truncates venue names mid-phrase ("ACM Transactions on"), leaving a
+# dangling function word that reads like a mistake in a short label.
+_DANGLING = {
+    "in", "on", "of", "and", "the", "for", "at", "to", "a", "an", "&",
+    "with", "from",
+}
+
+_ARXIV_RE = re.compile(r"^ar[xX]iv\b.*", re.IGNORECASE)
+
+MAX_VENUE_CHARS = 32
+
+
+def short_venue(venue: str | None, url: str | None = None, *, limit: int = MAX_VENUE_CHARS) -> str:
+    """A short, readable name for where a paper lives.
+
+    Falls back to the host when there is no venue -- a quarter of alert
+    results carry none, and "researchgate.net" says more than "Publisher".
+    """
+    label = _tidy_venue(venue, limit)
+    if label:
+        return label
+
+    host = _host_of(url)
+    return host or "Publisher"
+
+
+def _tidy_venue(venue: str | None, limit: int) -> str | None:
+    if not venue:
+        return None
+    text = _WS_RE.sub(" ", venue).strip(" ,.;:")
+    if not text:
+        return None
+
+    # Every arXiv variant is just arXiv; the identifier adds nothing here.
+    if _ARXIV_RE.match(text):
+        return "arXiv"
+
+    if len(text) > limit:
+        text = text[:limit].rsplit(" ", 1)[0]
+
+    # Drop a trailing function word, whether Scholar truncated it or we did.
+    words = text.split()
+    while words and words[-1].lower().strip(",.") in _DANGLING:
+        words.pop()
+    return " ".join(words).strip(" ,.;:") or None
+
+
+def _host_of(url: str | None) -> str | None:
+    if not url:
+        return None
+    from urllib.parse import urlparse
+
+    host = urlparse(url).netloc.lower()
+    return host[4:] if host.startswith("www.") else host or None

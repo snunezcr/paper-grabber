@@ -19,6 +19,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from .clean import short_venue
 from .models import AlertPaper, normalize_title
 
 
@@ -114,6 +115,10 @@ def paper_view(p: LedgerPaper) -> dict[str, Any]:
         "pdf_url": e.get("pdf_url"),
         "doi_url": f"https://doi.org/{e['doi']}" if e.get("doi") else None,
         "source_url": e.get("landing_url") or d.get("url"),
+        # What to call that link: the venue where known, else the host.
+        "source_label": short_venue(
+            d.get("venue"), e.get("landing_url") or d.get("url")
+        ),
         "alert_query": d.get("alert_query"),
         "has_pdf": bool(e.get("pdf_url")) or bool(d.get("has_pdf_badge")),
         "doi": e.get("doi"),
