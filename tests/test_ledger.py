@@ -160,3 +160,108 @@ def test_re_enriching_overwrites(ledger):
     ledger.attach_enrichment(key, {"doi": "10.1/old"})
     ledger.attach_enrichment(key, {"doi": "10.1/new"})
     assert ledger.pending()[0].payload["enrichment"]["doi"] == "10.1/new"
+
+
+# --- settings -----------------------------------------------------------------
+
+
+def test_setting_roundtrip(ledger):
+    ledger.set_setting("base_folder_id", "FOLDER123")
+    assert ledger.get_setting("base_folder_id") == "FOLDER123"
+
+
+def test_missing_setting_returns_default(ledger):
+    assert ledger.get_setting("nope") is None
+    assert ledger.get_setting("nope", "fallback") == "fallback"
+
+
+def test_setting_overwrites(ledger):
+    ledger.set_setting("k", "a")
+    ledger.set_setting("k", "b")
+    assert ledger.get_setting("k") == "b"
+
+
+def test_setting_can_be_cleared(ledger):
+    ledger.set_setting("k", "a")
+    ledger.clear_setting("k")
+    assert ledger.get_setting("k") is None
+
+
+def test_settings_persist(tmp_path):
+    path = tmp_path / "s.db"
+    with Ledger(path) as led:
+        led.set_setting("base_folder_id", "F1")
+    with Ledger(path) as again:
+        assert again.get_setting("base_folder_id") == "F1"
+
+
+# --- destinations -------------------------------------------------------------
+
+
+def test_destination_is_recorded(ledger):
+    ledger.record(paper())
+    key = ledger.pending()[0].key
+    ledger.decide("Quantum Error Correction", Decision.ACCEPTED)
+    assert ledger.set_destination(key, "F1", "Quantum")
+    filed = ledger.accepted(filed=True)[0]
+    assert filed.dest_folder_id == "F1"
+    assert filed.dest_folder_name == "Quantum"
+
+
+def test_destination_for_unknown_key_is_reported(ledger):
+    assert ledger.set_destination("nosuch", "F1", "X") is False
+
+
+def test_accepted_splits_by_whether_a_destination_is_set(ledger):
+    for t in ("A", "B"):
+        ledger.record(paper(title=t))
+        ledger.decide(t, Decision.ACCEPTED)
+    keys = {p.title: p.key for p in ledger.accepted()}
+    ledger.set_destination(keys["A"], "F1", "Folder One")
+
+    assert [p.title for p in ledger.accepted(filed=True)] == ["A"]
+    assert [p.title for p in ledger.accepted(filed=False)] == ["B"]
+    assert len(ledger.accepted()) == 2
+
+
+def test_rejected_papers_are_not_in_the_filing_queue(ledger):
+    ledger.record(paper(title="A"))
+    ledger.decide("A", Decision.REJECTED)
+    assert ledger.accepted(filed=False) == []
+
+
+def test_destination_can_be_changed(ledger):
+    ledger.record(paper())
+    key = ledger.pending()[0].key
+    ledger.decide("Quantum Error Correction", Decision.ACCEPTED)
+    ledger.set_destination(key, "F1", "One")
+    ledger.set_destination(key, "F2", "Two")
+    assert ledger.accepted(filed=True)[0].dest_folder_id == "F2"
+
+
+def test_existing_ledger_gains_the_new_columns(tmp_path):
+    # A ledger created before destinations existed must survive the upgrade
+    # with its papers intact.
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    con = sqlite3.connect(path)
+    con.executescript(
+        """
+        CREATE TABLE papers (
+            key TEXT PRIMARY KEY, title TEXT NOT NULL, payload TEXT NOT NULL,
+            decision TEXT NOT NULL, first_seen REAL NOT NULL, decided_at REAL
+        );
+        CREATE TABLE messages (message_id TEXT PRIMARY KEY, processed_at REAL NOT NULL);
+        """
+    )
+    con.execute(
+        "INSERT INTO papers VALUES ('k','Old Paper','{}','accepted',1.0,2.0)"
+    )
+    con.commit()
+    con.close()
+
+    with Ledger(path) as led:
+        assert [p.title for p in led.accepted()] == ["Old Paper"]
+        assert led.set_destination("k", "F1", "Dest")
+        assert led.accepted(filed=True)[0].dest_folder_name == "Dest"

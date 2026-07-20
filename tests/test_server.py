@@ -200,3 +200,163 @@ def test_enriched_year_supersedes_the_alert_year(seeded):
     c = TestClient(create_app(seeded))
     p = next(x for x in c.get("/api/pending").json()["papers"] if "Schizo" in x["title"])
     assert p["year"] == 2024
+
+
+# --- filing and folder browsing -----------------------------------------------
+
+
+class FakeDrive:
+    """Just enough Drive for the picker."""
+
+    def __init__(self, tree=None, fail=False):
+        # {folder_id: (name, parent, [child_ids])}
+        self.tree = tree or {
+            "BASE": ("Papers", "ROOT", ["QUANTUM", "NETWORKS"]),
+            "QUANTUM": ("Quantum", "BASE", ["ERRCORR"]),
+            "NETWORKS": ("Networks", "BASE", []),
+            "ERRCORR": ("Error Correction", "QUANTUM", []),
+        }
+        self.fail = fail
+        self.created = []
+
+    def list_child_folders(self, parent_id="root"):
+        if self.fail:
+            from paper_grabber.drive import DriveError
+            raise DriveError("drive is down")
+        _, _, children = self.tree.get(parent_id, ("", "", []))
+        return [{"id": c, "name": self.tree[c][0]} for c in children]
+
+    def breadcrumb(self, folder_id, stop_at=None):
+        trail = []
+        cur = folder_id
+        while cur in self.tree:
+            name, parent, _ = self.tree[cur]
+            trail.append({"id": cur, "name": name})
+            if stop_at and cur == stop_at:
+                break
+            cur = parent
+        trail.reverse()
+        return trail or [{"id": "root", "name": "My Drive"}]
+
+    def create_folder(self, name, *, parent_id):
+        new_id = f"NEW-{name}"
+        self.tree[new_id] = (name, parent_id, [])
+        self.tree[parent_id][2].append(new_id)
+        self.created.append((name, parent_id))
+        return {"id": new_id, "name": name}
+
+
+@pytest.fixture
+def drive():
+    return FakeDrive()
+
+
+@pytest.fixture
+def app_client(seeded, drive):
+    return TestClient(create_app(seeded, drive_factory=lambda: drive))
+
+
+def accept_all(client):
+    for p in client.get("/api/pending").json()["papers"]:
+        client.post(f"/api/papers/{p['key']}/decision", json={"decision": "accepted"})
+
+
+def test_settings_start_empty(app_client):
+    s = app_client.get("/api/settings").json()
+    assert s["base_folder_id"] is None
+
+
+def test_base_folder_can_be_set_and_persists(app_client):
+    r = app_client.put("/api/settings/base-folder",
+                       json={"folder_id": "BASE", "folder_name": "Papers"})
+    assert r.status_code == 200
+    assert app_client.get("/api/settings").json()["base_folder_id"] == "BASE"
+
+
+def test_browsing_defaults_to_the_base_folder(app_client):
+    app_client.put("/api/settings/base-folder",
+                   json={"folder_id": "BASE", "folder_name": "Papers"})
+    data = app_client.get("/api/drive/folders").json()
+    assert data["parent"] == "BASE"
+    assert {f["name"] for f in data["folders"]} == {"Quantum", "Networks"}
+
+
+def test_browsing_descends(app_client):
+    app_client.put("/api/settings/base-folder",
+                   json={"folder_id": "BASE", "folder_name": "Papers"})
+    data = app_client.get("/api/drive/folders", params={"parent": "QUANTUM"}).json()
+    assert [f["name"] for f in data["folders"]] == ["Error Correction"]
+
+
+def test_breadcrumb_stops_at_the_base(app_client):
+    # Navigating above the configured base would let papers be filed anywhere.
+    app_client.put("/api/settings/base-folder",
+                   json={"folder_id": "BASE", "folder_name": "Papers"})
+    data = app_client.get("/api/drive/folders", params={"parent": "ERRCORR"}).json()
+    assert [c["name"] for c in data["breadcrumb"]] == ["Papers", "Quantum", "Error Correction"]
+
+
+def test_new_folder_is_created_in_the_right_parent(app_client, drive):
+    r = app_client.post("/api/drive/folders", json={"name": "Photonics", "parent_id": "BASE"})
+    assert r.status_code == 200
+    assert drive.created == [("Photonics", "BASE")]
+
+
+def test_blank_folder_name_is_refused(app_client):
+    assert app_client.post("/api/drive/folders",
+                           json={"name": "   ", "parent_id": "BASE"}).status_code == 400
+
+
+def test_drive_failure_surfaces_as_502(seeded):
+    c = TestClient(create_app(seeded, drive_factory=lambda: FakeDrive(fail=True)))
+    assert c.get("/api/drive/folders").status_code == 502
+
+
+def test_accepted_papers_start_unfiled(app_client):
+    accept_all(app_client)
+    data = app_client.get("/api/accepted").json()
+    assert len(data["unfiled"]) == 2
+    assert data["filed"] == []
+
+
+def test_assigning_a_destination_in_bulk(app_client):
+    accept_all(app_client)
+    keys = [p["key"] for p in app_client.get("/api/accepted").json()["unfiled"]]
+    r = app_client.post("/api/destination",
+                        json={"keys": keys, "folder_id": "QUANTUM", "folder_name": "Quantum"})
+    assert r.status_code == 200
+    assert len(r.json()["updated"]) == 2
+
+    data = app_client.get("/api/accepted").json()
+    assert data["unfiled"] == []
+    assert {p["dest_folder_name"] for p in data["filed"]} == {"Quantum"}
+
+
+def test_destination_can_be_reassigned(app_client):
+    accept_all(app_client)
+    keys = [p["key"] for p in app_client.get("/api/accepted").json()["unfiled"]]
+    app_client.post("/api/destination",
+                    json={"keys": keys[:1], "folder_id": "QUANTUM", "folder_name": "Quantum"})
+    app_client.post("/api/destination",
+                    json={"keys": keys[:1], "folder_id": "NETWORKS", "folder_name": "Networks"})
+    filed = app_client.get("/api/accepted").json()["filed"]
+    assert filed[0]["dest_folder_name"] == "Networks"
+
+
+def test_empty_key_list_is_refused(app_client):
+    r = app_client.post("/api/destination",
+                        json={"keys": [], "folder_id": "Q", "folder_name": "Q"})
+    assert r.status_code == 400
+
+
+def test_unknown_keys_are_404(app_client):
+    r = app_client.post("/api/destination",
+                        json={"keys": ["nope"], "folder_id": "Q", "folder_name": "Q"})
+    assert r.status_code == 404
+
+
+def test_triage_works_without_drive_credentials(seeded):
+    # The triage half must not require Google auth at all.
+    c = TestClient(create_app(seeded))
+    assert c.get("/api/pending").status_code == 200
+    assert c.get("/api/accepted").status_code == 200

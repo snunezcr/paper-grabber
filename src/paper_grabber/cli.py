@@ -17,7 +17,7 @@ from .imap_source import (
     ImapError,
     check_login,
 )
-from .ledger import Decision, Ledger, paper_view
+from .ledger import SETTING_BASE_FOLDER_ID, Decision, Ledger, paper_view
 from .models import AlertPaper
 from .google_auth import (
     DEFAULT_CREDENTIALS,
@@ -324,23 +324,52 @@ def cmd_upload(args) -> int:
         return 2
 
     drive = DriveClient(creds)
-    try:
-        folder_id = drive.resolve_folder(args.folder)
-    except DriveError as exc:
-        print(f"could not resolve --folder: {exc}", file=sys.stderr)
+
+    # Destinations chosen during filing win; --folder is the fallback for
+    # anything filed before destinations existed, or staged outside the UI.
+    with Ledger(args.ledger) as ledger:
+        by_name = {}
+        for entry in ledger.accepted(filed=True):
+            v = paper_view(entry)
+            name = pdf_filename(v["title"], v["year"])
+            by_name[name] = (entry.dest_folder_id, entry.dest_folder_name)
+        fallback = ledger.get_setting(SETTING_BASE_FOLDER_ID)
+
+    fallback = args.folder or fallback
+    if not fallback and not by_name:
+        print(
+            "no destinations set. Choose them in the Filing tab, or pass --folder.",
+            file=sys.stderr,
+        )
         return 2
 
-    uploaded = kept = 0
-    for path in pending:
+    if fallback:
         try:
-            if not args.allow_duplicates and drive.exists_in_folder(path.name, folder_id):
+            fallback = drive.resolve_folder(fallback)
+        except DriveError as exc:
+            print(f"could not resolve folder: {exc}", file=sys.stderr)
+            return 2
+
+    uploaded = kept = unrouted = 0
+    for path in pending:
+        destination, dest_name = by_name.get(path.name, (None, None))
+        if destination is None:
+            destination, dest_name = fallback, "base folder"
+        if destination is None:
+            # Better to leave it staged than to guess a location.
+            unrouted += 1
+            print(f"SKIP  no destination chosen: {path.name}")
+            continue
+
+        try:
+            if not args.allow_duplicates and drive.exists_in_folder(path.name, destination):
                 print(f"SKIP  already in Drive: {path.name}")
                 continue
 
-            remote = drive.upload(path, folder_id=folder_id)
+            remote = drive.upload(path, folder_id=destination)
             staging.confirm(path, remote)
             uploaded += 1
-            print(f"UPLOADED  {path.name}")
+            print(f"UPLOADED  {path.name}  ->  {dest_name}")
         except VerificationError as exc:
             # The remote copy could not be proven identical, so the local file
             # stays put. This is the safe outcome, not a lost paper.
@@ -350,7 +379,10 @@ def cmd_upload(args) -> int:
             kept += 1
             print(f"FAILED (kept locally)  {exc}", file=sys.stderr)
 
-    print(f"\nuploaded {uploaded} | kept locally {kept} | still staged {len(staging.pending())}")
+    print(
+        f"\nuploaded {uploaded} | kept locally {kept} | "
+        f"no destination {unrouted} | still staged {len(staging.pending())}"
+    )
     return 0
 
 
@@ -383,7 +415,8 @@ def main(argv: list[str] | None = None) -> int:
 
     u = sub.add_parser("upload", help="upload staged PDFs to Drive, then remove them")
     u.add_argument("--staging", type=Path, required=True, help="staging directory")
-    u.add_argument("--folder", required=True, help="Drive folder ID or path, e.g. Research/Papers")
+    u.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
+    u.add_argument("--folder", help="fallback Drive folder ID or path for papers with no chosen destination")
     u.add_argument("--credentials", type=Path, default=DEFAULT_CREDENTIALS)
     u.add_argument("--token", type=Path, default=DEFAULT_TOKEN)
     u.add_argument("--non-interactive", action="store_true",

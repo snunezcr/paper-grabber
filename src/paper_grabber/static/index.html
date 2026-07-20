@@ -7,48 +7,50 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <title>paper-grabber</title>
 <style>
-  /* Sized for a Tab S10 held in either orientation. Touch targets are 48px
-     minimum; the accept/reject pair sits at the bottom of each card so it
-     falls under the thumb rather than at the top of a long abstract. */
+  /* Sized for a Tab S10 in either orientation. Touch targets are 48px
+     minimum; primary actions sit at the bottom of a card or pinned to the
+     bottom of the viewport, under the thumb rather than above a long
+     abstract. */
   :root {
-    --bg: #fbfbfa;
-    --card: #ffffff;
-    --ink: #1a1a1a;
-    --muted: #6b6b6b;
-    --line: #e4e4e1;
-    --accept: #1a7f4b;
-    --reject: #a33;
-    --accent: #2b5fd9;
+    --bg: #fbfbfa; --card: #fff; --ink: #1a1a1a; --muted: #6b6b6b;
+    --line: #e4e4e1; --accept: #1a7f4b; --reject: #a33; --accent: #2b5fd9;
+    --sheet: #fff;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #17181a;
-      --card: #202225;
-      --ink: #eceff1;
-      --muted: #9aa0a6;
-      --line: #303338;
-      --accept: #4ec27f;
-      --reject: #e2726e;
-      --accent: #7aa2f7;
+      --bg: #17181a; --card: #202225; --ink: #eceff1; --muted: #9aa0a6;
+      --line: #303338; --accept: #4ec27f; --reject: #e2726e; --accent: #7aa2f7;
+      --sheet: #202225;
     }
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--ink);
+    margin: 0; background: var(--bg); color: var(--ink);
     font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     -webkit-text-size-adjust: 100%;
   }
   header {
-    position: sticky; top: 0; z-index: 5;
-    display: flex; align-items: baseline; gap: .75rem;
-    padding: .9rem 1rem calc(.9rem + env(safe-area-inset-top));
-    background: var(--bg); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 5; background: var(--bg);
+    border-bottom: 1px solid var(--line);
+    padding: calc(.6rem + env(safe-area-inset-top)) 1rem .3rem;
   }
-  header h1 { font-size: 1.05rem; margin: 0; font-weight: 600; letter-spacing: -.01em; }
+  .titlebar { display: flex; align-items: baseline; gap: .75rem; }
+  .titlebar h1 { font-size: 1.05rem; margin: 0; font-weight: 600; }
   #counts { color: var(--muted); font-size: .85rem; font-variant-numeric: tabular-nums; }
-  main { max-width: 46rem; margin: 0 auto; padding: 1rem 1rem 6rem; }
+  nav { display: flex; gap: .25rem; margin-top: .5rem; }
+  nav button {
+    flex: 1; min-height: 44px; background: none; border: 0; cursor: pointer;
+    color: var(--muted); font-size: .95rem; font-weight: 600;
+    border-bottom: 2px solid transparent;
+  }
+  nav button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+  nav button .badge {
+    display: inline-block; min-width: 1.4em; padding: 0 .35em; margin-left: .3em;
+    border-radius: 999px; background: var(--line); color: var(--ink);
+    font-size: .78rem; font-variant-numeric: tabular-nums;
+  }
+
+  main { max-width: 46rem; margin: 0 auto; padding: 1rem 1rem 7rem; }
 
   .card {
     background: var(--card); border: 1px solid var(--line); border-radius: 12px;
@@ -58,21 +60,13 @@
   .title { font-size: 1.08rem; font-weight: 600; margin: 0 0 .35rem; line-height: 1.35; }
   .meta { color: var(--muted); font-size: .87rem; margin-bottom: .6rem; }
   .abstract { font-size: .94rem; margin: 0 0 .5rem; }
-  .abstract.clamped {
-    display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
-  .more {
-    background: none; border: 0; color: var(--accent); padding: .25rem 0;
-    font-size: .88rem; cursor: pointer; min-height: 32px;
-  }
+  .abstract.clamped { display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
+  .more { background: none; border: 0; color: var(--accent); padding: .25rem 0; font-size: .88rem; cursor: pointer; min-height: 32px; }
   .tags { display: flex; flex-wrap: wrap; gap: .4rem; margin: .6rem 0 .9rem; }
-  .tag {
-    font-size: .74rem; padding: .18rem .5rem; border-radius: 999px;
-    border: 1px solid var(--line); color: var(--muted);
-  }
+  .tag { font-size: .74rem; padding: .18rem .5rem; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
   .tag.pdf { color: var(--accept); border-color: currentColor; }
-  .tag.snippet { color: var(--muted); font-style: italic; }
+  .tag.snippet { font-style: italic; }
+  .tag.dest { color: var(--accent); border-color: currentColor; }
 
   .actions { display: flex; gap: .6rem; }
   .actions button {
@@ -88,74 +82,175 @@
     color: var(--accent); text-decoration: none; font-size: .9rem;
   }
 
-  #empty, #error { text-align: center; color: var(--muted); padding: 3rem 1rem; }
-  #error { color: var(--reject); }
+  /* filing list */
+  .pick { display: flex; gap: .75rem; align-items: flex-start; }
+  .pick input[type=checkbox] { width: 24px; height: 24px; margin-top: .2rem; flex: 0 0 auto; }
+  .filing-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: .75rem; margin-bottom: .9rem; flex-wrap: wrap;
+  }
+  .basefolder { color: var(--muted); font-size: .9rem; }
+  .linkbtn { background: none; border: 0; color: var(--accent); cursor: pointer; font-size: .9rem; min-height: 44px; padding: 0 .25rem; }
+  .section-label { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 1.5rem 0 .6rem; }
+
+  #filebar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 6;
+    background: var(--card); border-top: 1px solid var(--line);
+    padding: .7rem 1rem calc(.7rem + env(safe-area-inset-bottom));
+    display: flex; gap: .6rem; align-items: center;
+  }
+  #filebar .count { flex: 1; font-size: .9rem; color: var(--muted); }
+  #filebar button {
+    min-height: 48px; padding: 0 1.1rem; border-radius: 10px; font-weight: 600;
+    border: 1px solid var(--accent); background: var(--accent); color: #fff;
+    font-size: .95rem; cursor: pointer;
+  }
+  #filebar button.ghost { background: none; color: var(--ink); border-color: var(--line); }
+
+  /* folder picker sheet */
+  #sheet {
+    position: fixed; inset: 0; z-index: 20; background: var(--sheet);
+    display: flex; flex-direction: column;
+  }
+  #sheet header { border-bottom: 1px solid var(--line); }
+  #crumbs { display: flex; flex-wrap: wrap; gap: .2rem; align-items: center; font-size: .9rem; padding: .3rem 0 .1rem; }
+  #crumbs button { background: none; border: 0; color: var(--accent); cursor: pointer; font-size: .9rem; padding: .35rem .2rem; min-height: 40px; }
+  #crumbs span.sep { color: var(--muted); }
+  #crumbs .here { color: var(--ink); font-weight: 600; padding: .35rem .2rem; }
+  #folders { flex: 1; overflow-y: auto; padding: .5rem 1rem 1rem; }
+  .folder {
+    display: flex; align-items: center; gap: .7rem; width: 100%;
+    min-height: 56px; padding: .5rem .6rem; background: none; cursor: pointer;
+    border: 0; border-bottom: 1px solid var(--line); color: var(--ink);
+    font-size: 1rem; text-align: left;
+  }
+  .folder .chev { margin-left: auto; color: var(--muted); }
+  #sheetfoot {
+    border-top: 1px solid var(--line); display: flex; gap: .6rem;
+    padding: .7rem 1rem calc(.7rem + env(safe-area-inset-bottom));
+  }
+  #sheetfoot button { min-height: 48px; border-radius: 10px; font-size: .95rem; font-weight: 600; cursor: pointer; }
+  #sheetfoot .cancel { flex: 0 0 auto; padding: 0 1rem; border: 1px solid var(--line); background: none; color: var(--ink); }
+  #sheetfoot .newf { flex: 0 0 auto; padding: 0 1rem; border: 1px solid var(--line); background: none; color: var(--accent); }
+  #sheetfoot .confirm { flex: 1; border: 1px solid var(--accent); background: var(--accent); color: #fff; }
+
+  #empty, #error, .note { text-align: center; color: var(--muted); padding: 2.5rem 1rem; }
+  #error { color: var(--reject); padding: 1rem; }
   #undo {
     position: fixed; left: 50%; transform: translateX(-50%);
     bottom: calc(1.2rem + env(safe-area-inset-bottom));
     background: var(--ink); color: var(--bg); border: 0; border-radius: 999px;
     padding: .7rem 1.2rem; font-size: .9rem; min-height: 44px; cursor: pointer;
-    box-shadow: 0 4px 14px rgba(0,0,0,.22);
+    box-shadow: 0 4px 14px rgba(0,0,0,.22); z-index: 7;
   }
   [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <header>
-  <h1>paper-grabber</h1>
-  <span id="counts"></span>
+  <div class="titlebar">
+    <h1>paper-grabber</h1>
+    <span id="counts"></span>
+  </div>
+  <nav>
+    <button id="tab-triage" aria-selected="true">Triage<span class="badge" id="badge-triage">0</span></button>
+    <button id="tab-filing" aria-selected="false">Filing<span class="badge" id="badge-filing">0</span></button>
+  </nav>
 </header>
 
 <main>
-  <div id="list"></div>
-  <div id="empty" hidden>Nothing to triage. Run <code>paper-grabber sync</code>.</div>
   <div id="error" hidden></div>
+
+  <section id="view-triage">
+    <div id="list"></div>
+    <div id="empty" hidden>Nothing to triage. Run <code>paper-grabber sync</code>.</div>
+  </section>
+
+  <section id="view-filing" hidden>
+    <div class="filing-head">
+      <span class="basefolder" id="basefolder">No base folder set</span>
+      <button class="linkbtn" id="setbase">Change base folder</button>
+    </div>
+    <div id="unfiled"></div>
+    <div id="nofiling" class="note" hidden>Nothing accepted yet. Papers you mark interesting appear here.</div>
+    <div id="filed-wrap" hidden>
+      <div class="section-label">Filed, ready to upload</div>
+      <div id="filed"></div>
+    </div>
+  </section>
 </main>
+
+<div id="filebar" hidden>
+  <span class="count" id="selcount">0 selected</span>
+  <button class="ghost" id="selall">Select all</button>
+  <button id="filesel">File to…</button>
+</div>
 
 <button id="undo" hidden>Undo</button>
 
+<div id="sheet" hidden>
+  <header>
+    <div class="titlebar"><h1 id="sheettitle">Choose a folder</h1></div>
+    <div id="crumbs"></div>
+  </header>
+  <div id="folders"></div>
+  <div id="sheetfoot">
+    <button class="cancel" id="sheetcancel">Cancel</button>
+    <button class="newf" id="sheetnew">New folder</button>
+    <button class="confirm" id="sheetok">File here</button>
+  </div>
+</div>
+
 <script>
-const list = document.getElementById('list');
-const countsEl = document.getElementById('counts');
-const emptyEl = document.getElementById('empty');
-const errorEl = document.getElementById('error');
-const undoEl = document.getElementById('undo');
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-let lastAction = null;
+let state = { tab: 'triage', selected: new Set(), base: null, sheet: null };
 
-function showCounts(c) {
-  const pending = c.pending || 0, acc = c.accepted || 0, rej = c.rejected || 0;
-  countsEl.textContent = `${pending} pending · ${acc} accepted · ${rej} rejected`;
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try { detail = (await r.json()).detail || detail; } catch {}
+    throw new Error(detail);
+  }
+  return r.json();
 }
 
-function card(p) {
-  const el = document.createElement('article');
-  el.className = 'card';
-  el.dataset.key = p.key;
+function showError(msg) {
+  const el = $('#error');
+  el.textContent = msg;
+  el.hidden = false;
+  clearTimeout(showError.t);
+  showError.t = setTimeout(() => { el.hidden = true; }, 6000);
+}
 
+function showCounts(c) {
+  $('#counts').textContent =
+    `${c.pending || 0} pending · ${c.accepted || 0} accepted · ${c.rejected || 0} rejected`;
+  $('#badge-triage').textContent = c.pending || 0;
+}
+
+// ---------- triage ----------
+
+function cardBody(p) {
   const meta = [p.authors.join(', '), p.venue, p.year].filter(Boolean).join(' · ');
-
   const tags = [];
   if (p.has_pdf) tags.push('<span class="tag pdf">PDF available</span>');
   if (p.abstract_is_snippet) tags.push('<span class="tag snippet">snippet, not abstract</span>');
   if (p.alert_query) tags.push(`<span class="tag">${esc(p.alert_query)}</span>`);
-  if (p.doi) tags.push(`<span class="tag">${esc(p.doi)}</span>`);
-
-  el.innerHTML = `
+  if (p.dest_folder_name) tags.push(`<span class="tag dest">→ ${esc(p.dest_folder_name)}</span>`);
+  return `
     <h2 class="title">${esc(p.title)}</h2>
     <div class="meta">${esc(meta) || '&nbsp;'}</div>
     <p class="abstract clamped">${esc(p.abstract || 'No abstract or snippet available.')}</p>
     <button class="more" hidden>Show more</button>
-    <div class="tags">${tags.join('')}</div>
-    <div class="actions">
-      <button class="yes">Interesting</button>
-      <button class="no">Skip</button>
-      ${p.url ? `<a class="open" href="${esc(p.url)}" target="_blank" rel="noopener">Open</a>` : ''}
-    </div>`;
+    <div class="tags">${tags.join('')}</div>`;
+}
 
-  const abs = el.querySelector('.abstract');
-  const more = el.querySelector('.more');
-  // Only offer "show more" when the text is actually clipped.
+function wireAbstract(el) {
+  const abs = el.querySelector('.abstract'), more = el.querySelector('.more');
   requestAnimationFrame(() => {
     if (abs.scrollHeight > abs.clientHeight + 4) more.hidden = false;
   });
@@ -163,87 +258,244 @@ function card(p) {
     abs.classList.toggle('clamped');
     more.textContent = abs.classList.contains('clamped') ? 'Show more' : 'Show less';
   });
+}
 
+function triageCard(p) {
+  const el = document.createElement('article');
+  el.className = 'card';
+  el.innerHTML = cardBody(p) + `
+    <div class="actions">
+      <button class="yes">Interesting</button>
+      <button class="no">Skip</button>
+      ${p.url ? `<a class="open" href="${esc(p.url)}" target="_blank" rel="noopener">Open</a>` : ''}
+    </div>`;
+  wireAbstract(el);
   el.querySelector('.yes').addEventListener('click', () => decide(el, p, 'accepted'));
   el.querySelector('.no').addEventListener('click', () => decide(el, p, 'rejected'));
   return el;
 }
 
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g, c => (
-    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
-  ));
-}
-
 async function decide(el, paper, decision) {
   el.classList.add('going');
   try {
-    const r = await fetch(`/api/papers/${encodeURIComponent(paper.key)}/decision`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+    const data = await api(`/api/papers/${encodeURIComponent(paper.key)}/decision`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({decision})
     });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data = await r.json();
     showCounts(data.counts);
     setTimeout(() => {
       el.remove();
-      if (!list.children.length) emptyEl.hidden = false;
+      $('#empty').hidden = $('#list').children.length > 0;
     }, 180);
-    // Reversing a decision is one tap; a mis-tap on a tablet is common and
-    // an accidental reject would otherwise be invisible forever.
-    lastAction = {paper, previous: 'pending'};
-    undoEl.hidden = false;
+    // Reversing a decision must be one tap: a mis-tap is easy on a tablet, and
+    // a rejected paper is suppressed on every future sync -- invisible forever.
+    state.lastUndo = paper;
+    $('#undo').hidden = false;
+    loadFiling();
   } catch (e) {
     el.classList.remove('going');
     showError(`Could not record decision: ${e.message}`);
   }
 }
 
-undoEl.addEventListener('click', async () => {
-  if (!lastAction) return;
-  const {paper} = lastAction;
+$('#undo').addEventListener('click', async () => {
+  const paper = state.lastUndo;
+  if (!paper) return;
   try {
-    const r = await fetch(`/api/papers/${encodeURIComponent(paper.key)}/decision`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+    const data = await api(`/api/papers/${encodeURIComponent(paper.key)}/decision`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({decision: 'pending'})
     });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data = await r.json();
     showCounts(data.counts);
-    emptyEl.hidden = true;
-    list.prepend(card(paper));
-    lastAction = null;
-    undoEl.hidden = true;
-  } catch (e) {
-    showError(`Could not undo: ${e.message}`);
-  }
+    $('#empty').hidden = true;
+    $('#list').prepend(triageCard(paper));
+    state.lastUndo = null;
+    $('#undo').hidden = true;
+    loadFiling();
+  } catch (e) { showError(`Could not undo: ${e.message}`); }
 });
 
-function showError(msg) {
-  errorEl.textContent = msg;
-  errorEl.hidden = false;
-  setTimeout(() => { errorEl.hidden = true; }, 4000);
+async function loadTriage() {
+  try {
+    const data = await api('/api/pending');
+    showCounts(data.counts);
+    $('#list').replaceChildren(...data.papers.map(triageCard));
+    $('#empty').hidden = data.papers.length > 0;
+  } catch (e) { showError(`Could not load papers: ${e.message}`); }
 }
 
-async function load() {
+// ---------- filing ----------
+
+function filingCard(p, {selectable}) {
+  const el = document.createElement('article');
+  el.className = 'card';
+  const inner = document.createElement('div');
+  inner.className = 'pick';
+  inner.innerHTML = `
+    ${selectable ? `<input type="checkbox" aria-label="Select ${esc(p.title)}">` : ''}
+    <div style="flex:1">${cardBody(p)}</div>`;
+  el.appendChild(inner);
+  wireAbstract(el);
+
+  if (selectable) {
+    const box = el.querySelector('input');
+    box.checked = state.selected.has(p.key);
+    box.addEventListener('change', () => {
+      box.checked ? state.selected.add(p.key) : state.selected.delete(p.key);
+      refreshFileBar();
+    });
+  }
+  return el;
+}
+
+function refreshFileBar() {
+  const n = state.selected.size;
+  $('#selcount').textContent = `${n} selected`;
+  $('#filesel').disabled = n === 0;
+  $('#filebar').hidden = !(state.tab === 'filing' && $('#unfiled').children.length);
+}
+
+async function loadFiling() {
   try {
-    const r = await fetch('/api/pending');
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data = await r.json();
-    showCounts(data.counts);
-    list.replaceChildren(...data.papers.map(card));
-    emptyEl.hidden = data.papers.length > 0;
+    const data = await api('/api/accepted');
+    state.base = data.base;
+    $('#basefolder').textContent = data.base.folder_name
+      ? `Base folder: ${data.base.folder_name}`
+      : 'No base folder set';
+
+    // Drop selections for papers that are no longer unfiled.
+    const live = new Set(data.unfiled.map(p => p.key));
+    for (const k of [...state.selected]) if (!live.has(k)) state.selected.delete(k);
+
+    $('#unfiled').replaceChildren(...data.unfiled.map(p => filingCard(p, {selectable: true})));
+    $('#filed').replaceChildren(...data.filed.map(p => filingCard(p, {selectable: false})));
+    $('#filed-wrap').hidden = data.filed.length === 0;
+    $('#nofiling').hidden = data.unfiled.length + data.filed.length > 0;
+    $('#badge-filing').textContent = data.unfiled.length;
+    refreshFileBar();
+  } catch (e) { showError(`Could not load accepted papers: ${e.message}`); }
+}
+
+$('#selall').addEventListener('click', () => {
+  const boxes = [...$('#unfiled').querySelectorAll('input[type=checkbox]')];
+  const all = boxes.every(b => b.checked);
+  boxes.forEach(b => { b.checked = !all; b.dispatchEvent(new Event('change')); });
+});
+
+$('#filesel').addEventListener('click', () => {
+  if (!state.base?.folder_id) {
+    showError('Set a base folder first.');
+    return;
+  }
+  openSheet({mode: 'file', keys: [...state.selected]});
+});
+
+$('#setbase').addEventListener('click', () => openSheet({mode: 'base'}));
+
+// ---------- folder picker ----------
+
+async function openSheet(opts) {
+  state.sheet = {...opts, parent: opts.mode === 'base' ? 'root' : null};
+  $('#sheettitle').textContent = opts.mode === 'base'
+    ? 'Choose the base folder'
+    : `File ${opts.keys.length} paper${opts.keys.length === 1 ? '' : 's'}`;
+  $('#sheetok').textContent = opts.mode === 'base' ? 'Use this folder' : 'File here';
+  $('#sheet').hidden = false;
+  await browse(state.sheet.parent);
+}
+
+async function browse(parent) {
+  try {
+    const q = parent ? `?parent=${encodeURIComponent(parent)}` : '';
+    const data = await api(`/api/drive/folders${q}`);
+    state.sheet.parent = data.parent;
+
+    const crumbs = $('#crumbs');
+    crumbs.replaceChildren();
+    data.breadcrumb.forEach((c, i) => {
+      if (i) crumbs.insertAdjacentHTML('beforeend', '<span class="sep">/</span>');
+      if (i === data.breadcrumb.length - 1) {
+        crumbs.insertAdjacentHTML('beforeend', `<span class="here">${esc(c.name)}</span>`);
+      } else {
+        const b = document.createElement('button');
+        b.textContent = c.name;
+        b.addEventListener('click', () => browse(c.id));
+        crumbs.appendChild(b);
+      }
+    });
+
+    const wrap = $('#folders');
+    wrap.replaceChildren();
+    if (!data.folders.length) {
+      wrap.innerHTML = '<div class="note">No subfolders here. "File here" uses this folder.</div>';
+    }
+    data.folders.forEach(f => {
+      const b = document.createElement('button');
+      b.className = 'folder';
+      b.innerHTML = `<span>${esc(f.name)}</span><span class="chev">›</span>`;
+      b.addEventListener('click', () => browse(f.id));
+      wrap.appendChild(b);
+    });
   } catch (e) {
-    showError(`Could not load papers: ${e.message}`);
+    $('#folders').innerHTML = `<div class="note">${esc(e.message)}</div>`;
   }
 }
 
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch(() => {});
+$('#sheetcancel').addEventListener('click', () => { $('#sheet').hidden = true; state.sheet = null; });
+
+$('#sheetnew').addEventListener('click', async () => {
+  const name = prompt('New folder name');
+  if (!name || !name.trim()) return;
+  try {
+    const f = await api('/api/drive/folders', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name.trim(), parent_id: state.sheet.parent})
+    });
+    await browse(f.id);
+  } catch (e) { showError(`Could not create folder: ${e.message}`); }
+});
+
+$('#sheetok').addEventListener('click', async () => {
+  const here = $('#crumbs .here')?.textContent || 'folder';
+  const {mode, keys, parent} = state.sheet;
+  try {
+    if (mode === 'base') {
+      await api('/api/settings/base-folder', {
+        method: 'PUT', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({folder_id: parent, folder_name: here})
+      });
+    } else {
+      await api('/api/destination', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({keys, folder_id: parent, folder_name: here})
+      });
+      state.selected.clear();
+    }
+    $('#sheet').hidden = true;
+    state.sheet = null;
+    loadFiling();
+  } catch (e) { showError(e.message); }
+});
+
+// ---------- tabs ----------
+
+function selectTab(tab) {
+  state.tab = tab;
+  $('#tab-triage').setAttribute('aria-selected', tab === 'triage');
+  $('#tab-filing').setAttribute('aria-selected', tab === 'filing');
+  $('#view-triage').hidden = tab !== 'triage';
+  $('#view-filing').hidden = tab !== 'filing';
+  $('#undo').hidden = tab !== 'triage' || !state.lastUndo;
+  refreshFileBar();
+  if (tab === 'filing') loadFiling();
 }
-load();
+
+$('#tab-triage').addEventListener('click', () => selectTab('triage'));
+$('#tab-filing').addEventListener('click', () => selectTab('filing'));
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+loadTriage();
+loadFiling();
 </script>
 </body>
 </html>

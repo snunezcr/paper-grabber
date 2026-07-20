@@ -1,9 +1,9 @@
 """Upload staged PDFs to Google Drive.
 
-Scope is drive.file only: this app can see and touch nothing in Drive except
-the files it created itself. The destination is therefore given as a folder ID
-rather than a path, since looking a folder up by name would need the sensitive
-drive.metadata.readonly scope.
+Writes are confined to drive.file, so the app can only modify files it created
+itself. Folder browsing uses drive.metadata.readonly, which exposes names and
+hierarchy but never file contents -- enough to let the destination picker walk
+an existing Drive tree, and no more.
 
 Every upload requests ``md5Checksum`` and ``size`` back, because those are what
 StagingArea.confirm() needs to prove the remote copy is intact before the local
@@ -18,6 +18,7 @@ file.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -26,6 +27,7 @@ from googleapiclient.http import MediaFileUpload
 from .staging import RemoteFile
 
 PDF_MIME = "application/pdf"
+FOLDER_MIME = "application/vnd.google-apps.folder"
 
 # Ask for exactly the fields confirmation depends on.
 _UPLOAD_FIELDS = "id,name,size,md5Checksum"
@@ -48,20 +50,123 @@ class DriveClient:
     # --- folders --------------------------------------------------------------
 
     def resolve_folder(self, spec: str) -> str:
-        """Turn a folder ID into a folder ID, or explain why a path will not do.
-
-        Path lookup needs drive.metadata.readonly, a sensitive scope this app
-        deliberately does not request: drive.file alone cannot see folders it
-        did not create. The folder ID is the last path segment of the folder's
-        URL in Drive.
-        """
-        if _looks_like_id(spec):
+        """Turn a folder ID or a path into a folder ID."""
+        if "/" not in spec and _looks_like_id(spec):
             return spec
-        raise DriveError(
-            f"{spec!r} is not a Drive folder ID. This app requests only the "
-            "drive.file scope, which cannot look folders up by name. Open the "
-            "folder in Drive and copy the ID from the URL after /folders/."
+
+        parent = "root"
+        for part in [p for p in spec.strip("/").split("/") if p]:
+            parent = self._child_folder_id(parent, part)
+        return parent
+
+    def _child_folder_id(self, parent: str, name: str) -> str:
+        matches = [f for f in self.list_child_folders(parent) if f["name"] == name]
+        if not matches:
+            raise DriveError(f"no folder named {name!r} under {parent}")
+        if len(matches) > 1:
+            # Drive permits duplicate names; guessing would file papers into an
+            # arbitrary one of them.
+            raise DriveError(
+                f"{len(matches)} folders named {name!r} under {parent}; "
+                "use a folder ID instead"
+            )
+        return matches[0]["id"]
+
+    # --- browsing -------------------------------------------------------------
+
+    def list_child_folders(self, parent_id: str = "root") -> list[dict[str, str]]:
+        """Immediate subfolders of a folder, name-ordered.
+
+        Only folders: the destination picker has no use for files, and omitting
+        them keeps a Drive full of PDFs navigable.
+        """
+        query = (
+            f"mimeType = '{FOLDER_MIME}' and '{_escape(parent_id)}' in parents "
+            "and trashed = false"
         )
+        folders: list[dict[str, str]] = []
+        page_token = None
+        try:
+            while True:
+                resp = (
+                    self._service.files()
+                    .list(
+                        q=query,
+                        fields="nextPageToken, files(id,name)",
+                        orderBy="name",
+                        pageSize=200,
+                        pageToken=page_token,
+                    )
+                    .execute()
+                )
+                folders.extend(
+                    {"id": f["id"], "name": f["name"]} for f in resp.get("files", [])
+                )
+                page_token = resp.get("nextPageToken")
+                if not page_token:
+                    return folders
+        except HttpError as exc:
+            raise DriveError(f"could not list folders under {parent_id}: {exc}") from exc
+
+    def folder_info(self, folder_id: str) -> dict[str, Any]:
+        """Name and parent of one folder."""
+        try:
+            resp = (
+                self._service.files()
+                .get(fileId=folder_id, fields="id,name,parents,mimeType")
+                .execute()
+            )
+        except HttpError as exc:
+            raise DriveError(f"could not read folder {folder_id}: {exc}") from exc
+
+        if resp.get("mimeType") and resp["mimeType"] != FOLDER_MIME:
+            raise DriveError(f"{folder_id} is not a folder")
+        return {
+            "id": resp["id"],
+            "name": resp.get("name", ""),
+            "parents": resp.get("parents") or [],
+        }
+
+    def breadcrumb(self, folder_id: str, *, stop_at: str | None = None) -> list[dict[str, str]]:
+        """Ancestors of a folder, outermost first, ending with the folder.
+
+        `stop_at` bounds the walk at the configured base folder so the picker
+        never invites navigation above it. Without a bound the walk ends at My
+        Drive. A depth cap guards against a parent cycle, which Drive should
+        not produce but which would otherwise hang the request.
+        """
+        if folder_id in ("root", ""):
+            return [{"id": "root", "name": "My Drive"}]
+
+        trail: list[dict[str, str]] = []
+        current = folder_id
+        for _ in range(64):
+            info = self.folder_info(current)
+            trail.append({"id": info["id"], "name": info["name"]})
+            if stop_at and info["id"] == stop_at:
+                break
+            parents = info["parents"]
+            if not parents:
+                trail.append({"id": "root", "name": "My Drive"})
+                break
+            current = parents[0]
+        trail.reverse()
+        return trail
+
+    def create_folder(self, name: str, *, parent_id: str) -> dict[str, str]:
+        """Create a subfolder and return it."""
+        try:
+            resp = (
+                self._service.files()
+                .create(
+                    body={"name": name, "mimeType": FOLDER_MIME, "parents": [parent_id]},
+                    fields="id,name",
+                )
+                .execute()
+            )
+        except HttpError as exc:
+            raise DriveError(f"could not create folder {name!r}: {exc}") from exc
+        return {"id": resp["id"], "name": resp["name"]}
 
     # --- upload ---------------------------------------------------------------
 
@@ -103,8 +208,10 @@ class DriveClient:
         Drive happily stores duplicates, so a re-run would otherwise pile up
         copies of the same paper.
         """
-        safe = name.replace("\\", "\\\\").replace("'", "\\'")
-        query = f"name = '{safe}' and '{folder_id}' in parents and trashed = false"
+        query = (
+            f"name = '{_escape(name)}' and '{_escape(folder_id)}' in parents "
+            "and trashed = false"
+        )
         try:
             resp = (
                 self._service.files().list(q=query, fields="files(id)", pageSize=1).execute()
@@ -123,6 +230,15 @@ def _execute(request):
     while response is None:
         _, response = request.next_chunk()
     return response
+
+
+def _escape(value: str) -> str:
+    """Escape a value for a Drive query string.
+
+    A folder called "Nunez's papers" would otherwise terminate the quoted
+    literal early and produce a syntax error, or worse, a different query.
+    """
+    return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
 def _looks_like_id(value: str) -> bool:

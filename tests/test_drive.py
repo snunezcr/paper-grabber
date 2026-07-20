@@ -43,7 +43,10 @@ class FakeRequest:
 
 class FakeFiles:
     def __init__(self, *, create_result=None, list_results=None, create_error=None,
-                 resumable=False, chunks=1):
+                 resumable=False, chunks=1, get_results=None, get_error=None):
+        self.get_results = get_results or {}
+        self.get_error = get_error
+        self.get_calls = []
         self.create_result = create_result
         self.list_results = list(list_results or [])
         self.create_error = create_error
@@ -59,10 +62,16 @@ class FakeFiles:
             error=self.create_error, chunks=self.chunks,
         )
 
-    def list(self, q=None, fields=None, pageSize=None):
+    def list(self, q=None, fields=None, pageSize=None, orderBy=None, pageToken=None):
         self.list_queries.append(q)
         result = self.list_results.pop(0) if self.list_results else {"files": []}
         return FakeRequest(result)
+
+    def get(self, fileId=None, fields=None):
+        self.get_calls.append(fileId)
+        if self.get_error:
+            return FakeRequest(None, error=self.get_error)
+        return FakeRequest(self.get_results.get(fileId, {}))
 
 
 class FakeService:
@@ -197,28 +206,137 @@ def test_folder_id_passes_through_untouched():
     files = FakeFiles()
     fid = "1a2b3c4d5e6f7g8h9i0jKLMNOPqrstuv"
     assert client(files).resolve_folder(fid) == fid
-    assert files.list_queries == []  # no lookup, so no metadata scope needed
-
-
-def test_folder_path_is_refused_with_an_actionable_message():
-    # drive.file cannot see folders it did not create, so a path cannot be
-    # resolved. Better to say so than to fail obscurely at upload time.
-    files = FakeFiles()
-    with pytest.raises(DriveError, match="not a Drive folder ID"):
-        client(files).resolve_folder("Research/Papers")
-
-
-def test_folder_name_is_refused_too():
-    files = FakeFiles()
-    with pytest.raises(DriveError, match="copy the ID from the URL"):
-        client(files).resolve_folder("Papers")
-
-
-def test_refusal_does_not_call_the_api():
-    files = FakeFiles()
-    with pytest.raises(DriveError):
-        client(files).resolve_folder("Papers")
     assert files.list_queries == []
+
+
+def test_folder_path_is_resolved_segment_by_segment():
+    files = FakeFiles(list_results=[
+        {"files": [{"id": "RESEARCH", "name": "Research"}]},
+        {"files": [{"id": "PAPERS", "name": "Papers"}]},
+    ])
+    assert client(files).resolve_folder("Research/Papers") == "PAPERS"
+    assert "'root' in parents" in files.list_queries[0]
+    assert "'RESEARCH' in parents" in files.list_queries[1]
+
+
+def test_missing_folder_is_reported():
+    files = FakeFiles(list_results=[{"files": []}])
+    with pytest.raises(DriveError, match="no folder named"):
+        client(files).resolve_folder("Nope")
+
+
+def test_ambiguous_folder_name_is_refused():
+    # Drive allows duplicate folder names; picking one at random would file
+    # papers somewhere the user did not choose.
+    files = FakeFiles(list_results=[
+        {"files": [{"id": "A", "name": "Papers"}, {"id": "B", "name": "Papers"}]}
+    ])
+    with pytest.raises(DriveError, match="use a folder ID"):
+        client(files).resolve_folder("Papers")
+
+
+# --- browsing -----------------------------------------------------------------
+
+
+def test_list_child_folders_returns_id_and_name():
+    files = FakeFiles(list_results=[
+        {"files": [{"id": "A", "name": "Quantum"}, {"id": "B", "name": "Networks"}]}
+    ])
+    assert client(files).list_child_folders("ROOT") == [
+        {"id": "A", "name": "Quantum"},
+        {"id": "B", "name": "Networks"},
+    ]
+
+
+def test_listing_asks_only_for_folders():
+    files = FakeFiles(list_results=[{"files": []}])
+    client(files).list_child_folders("ROOT")
+    q = files.list_queries[0]
+    assert "application/vnd.google-apps.folder" in q
+    assert "trashed = false" in q
+
+
+def test_listing_follows_pages():
+    files = FakeFiles(list_results=[
+        {"files": [{"id": "A", "name": "One"}], "nextPageToken": "t"},
+        {"files": [{"id": "B", "name": "Two"}]},
+    ])
+    assert len(client(files).list_child_folders("ROOT")) == 2
+
+
+def test_listing_escapes_an_apostrophe():
+    files = FakeFiles(list_results=[{"files": []}])
+    client(files).list_child_folders("Nunez's folder")
+    assert "\\'" in files.list_queries[0]
+
+
+def test_folder_info_returns_name_and_parents():
+    files = FakeFiles(get_results={"F1": {
+        "id": "F1", "name": "Papers", "parents": ["ROOT"],
+        "mimeType": "application/vnd.google-apps.folder"}})
+    info = client(files).folder_info("F1")
+    assert info["name"] == "Papers"
+    assert info["parents"] == ["ROOT"]
+
+
+def test_folder_info_refuses_a_non_folder():
+    files = FakeFiles(get_results={"F1": {
+        "id": "F1", "name": "a.pdf", "mimeType": "application/pdf"}})
+    with pytest.raises(DriveError, match="not a folder"):
+        client(files).folder_info("F1")
+
+
+def test_breadcrumb_walks_up_to_my_drive():
+    files = FakeFiles(get_results={
+        "PAPERS": {"id": "PAPERS", "name": "Papers", "parents": ["RESEARCH"],
+                   "mimeType": "application/vnd.google-apps.folder"},
+        "RESEARCH": {"id": "RESEARCH", "name": "Research", "parents": [],
+                     "mimeType": "application/vnd.google-apps.folder"},
+    })
+    trail = client(files).breadcrumb("PAPERS")
+    assert [c["name"] for c in trail] == ["My Drive", "Research", "Papers"]
+
+
+def test_breadcrumb_stops_at_the_base_folder():
+    # The picker must not invite navigation above the configured base.
+    files = FakeFiles(get_results={
+        "SUB": {"id": "SUB", "name": "Quantum", "parents": ["BASE"],
+                "mimeType": "application/vnd.google-apps.folder"},
+        "BASE": {"id": "BASE", "name": "Papers", "parents": ["ROOT"],
+                 "mimeType": "application/vnd.google-apps.folder"},
+    })
+    trail = client(files).breadcrumb("SUB", stop_at="BASE")
+    assert [c["name"] for c in trail] == ["Papers", "Quantum"]
+
+
+def test_breadcrumb_of_root_is_my_drive():
+    assert client(FakeFiles()).breadcrumb("root") == [{"id": "root", "name": "My Drive"}]
+
+
+def test_breadcrumb_survives_a_parent_cycle():
+    # Drive should never produce this, but an unbounded walk would hang.
+    files = FakeFiles(get_results={
+        "A": {"id": "A", "name": "A", "parents": ["B"],
+              "mimeType": "application/vnd.google-apps.folder"},
+        "B": {"id": "B", "name": "B", "parents": ["A"],
+              "mimeType": "application/vnd.google-apps.folder"},
+    })
+    trail = client(files).breadcrumb("A")
+    assert len(trail) <= 65
+
+
+def test_create_folder_returns_the_new_folder():
+    files = FakeFiles(create_result={"id": "NEW", "name": "Quantum"})
+    assert client(files).create_folder("Quantum", parent_id="BASE") == {
+        "id": "NEW", "name": "Quantum"}
+
+
+def test_create_folder_uses_the_folder_mime_type():
+    files = FakeFiles(create_result={"id": "NEW", "name": "Quantum"})
+    client(files).create_folder("Quantum", parent_id="BASE")
+    body = files.create_calls[0]["body"]
+    assert body["mimeType"] == "application/vnd.google-apps.folder"
+    assert body["parents"] == ["BASE"]
 
 
 # --- duplicate detection ------------------------------------------------------
