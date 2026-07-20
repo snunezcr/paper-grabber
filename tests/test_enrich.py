@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from paper_grabber.enrich import (
+    RateLimited,
     DEFAULT_MATCH_THRESHOLD,
     Enrichment,
     OpenAlexClient,
@@ -218,3 +219,60 @@ def test_timeout_is_reported_not_raised():
     e = c.enrich(AlertPaper(title="Anything", year=2026))
     assert not e.matched
     assert "lookup failed" in e.note
+
+
+# --- authentication -----------------------------------------------------------
+
+
+def test_api_key_is_sent_when_provided():
+    seen = {}
+
+    def handler(request):
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(200, json={"results": []})
+
+    make_client(handler, api_key="secret-key").search_by_title("x")
+    assert seen["params"]["api_key"] == "secret-key"
+
+
+def test_api_key_comes_from_the_environment(monkeypatch):
+    monkeypatch.setenv("OPENALEX_API_KEY", "from-env")
+    seen = {}
+
+    def handler(request):
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(200, json={"results": []})
+
+    make_client(handler).search_by_title("x")
+    assert seen["params"]["api_key"] == "from-env"
+
+
+def test_requests_are_anonymous_without_a_key(monkeypatch):
+    monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+    seen = {}
+
+    def handler(request):
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(200, json={"results": []})
+
+    make_client(handler).search_by_title("x")
+    assert "api_key" not in seen["params"]
+
+
+def test_rate_limit_message_includes_the_allowance():
+    def handler(request):
+        return httpx.Response(
+            429,
+            json={"message": "Insufficient budget.", "retryAfter": 100},
+            headers={
+                "x-ratelimit-limit-usd": "0.1",
+                "x-ratelimit-prepaid-remaining-usd": "0",
+            },
+        )
+
+    c = make_client(handler)
+    with pytest.raises(RateLimited) as exc:
+        c.enrich(AlertPaper(title="Anything", year=2026))
+    # The prose message never says how big the allowance is; the headers do.
+    assert "daily allowance $0.1" in str(exc.value)
+    assert "prepaid balance $0" in str(exc.value)

@@ -60,7 +60,9 @@ def _enrich_all(papers, args):
     cache = None if args.no_cache else LookupCache(args.cache)
     pairs, exhausted = [], False
     try:
-        with OpenAlexClient(mailto=args.mailto, cache=cache) as oa:
+        with OpenAlexClient(
+            mailto=args.mailto, cache=cache, api_key=getattr(args, "api_key", None)
+        ) as oa:
             for i, paper in enumerate(papers):
                 if i:
                     time.sleep(args.delay)
@@ -539,6 +541,7 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--summary", action="store_true", help="human-readable table")
     e.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     e.add_argument("--no-cache", action="store_true")
+    e.add_argument("--api-key", help="OpenAlex API key (default: $OPENALEX_API_KEY)")
     e.set_defaults(func=cmd_enrich)
 
     d = sub.add_parser("download", help="parse, enrich, and save PDFs to a directory")
@@ -548,6 +551,7 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--delay", type=float, default=0.15)
     d.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     d.add_argument("--no-cache", action="store_true")
+    d.add_argument("--api-key", help="OpenAlex API key (default: $OPENALEX_API_KEY)")
     d.set_defaults(func=cmd_download)
 
     ft = sub.add_parser("fetch", help="download PDFs for accepted papers")
@@ -594,6 +598,7 @@ def main(argv: list[str] | None = None) -> int:
     ep.add_argument("--delay", type=float, default=0.15)
     ep.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     ep.add_argument("--no-cache", action="store_true")
+    ep.add_argument("--api-key", help="OpenAlex API key (default: $OPENALEX_API_KEY)")
     ep.set_defaults(func=cmd_enrich_pending)
 
     sv = sub.add_parser("serve", help="run the triage web app")

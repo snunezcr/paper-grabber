@@ -24,6 +24,10 @@ OPENALEX_WORKS = "https://api.openalex.org/works"
 
 # OpenAlex asks for a contact address in exchange for the faster "polite pool".
 _MAILTO_ENV = "OPENALEX_MAILTO"
+# An API key ties requests to an account, so any prepaid balance and the
+# account's own daily allowance apply. Without it requests are anonymous and
+# metered against a shared bucket.
+_API_KEY_ENV = "OPENALEX_API_KEY"
 
 # Below this title similarity we refuse the match. Title search is forgiving --
 # it will happily return a different survey on the same topic -- and a wrong
@@ -64,6 +68,17 @@ class RateLimited(Exception):
             body = {}
         retry = body.get("retryAfter")
         message = body.get("message") or "OpenAlex rate limit exceeded"
+
+        # The headers say what the allowance actually is, which the prose
+        # message does not -- useful for deciding whether to add credit.
+        limit = response.headers.get("x-ratelimit-limit-usd")
+        prepaid = response.headers.get("x-ratelimit-prepaid-remaining-usd")
+        if limit:
+            message += f" (daily allowance ${limit}"
+            if prepaid is not None:
+                message += f", prepaid balance ${prepaid}"
+            message += ")"
+
         return cls(message, retry_after=int(retry) if retry else None)
 
 
@@ -213,8 +228,10 @@ class OpenAlexClient:
         timeout: float = 20.0,
         threshold: float = DEFAULT_MATCH_THRESHOLD,
         cache: "LookupCache | None" = None,
+        api_key: str | None = None,
     ) -> None:
         self.mailto = mailto or os.environ.get(_MAILTO_ENV)
+        self.api_key = api_key or os.environ.get(_API_KEY_ENV)
         self.threshold = threshold
         self.cache = cache
         self._client = client or httpx.Client(
@@ -231,6 +248,8 @@ class OpenAlexClient:
         params = dict(extra)
         if self.mailto:
             params["mailto"] = self.mailto
+        if self.api_key:
+            params["api_key"] = self.api_key
         return params
 
     def search_by_title(self, title: str, *, per_page: int = 5) -> list[dict[str, Any]]:
