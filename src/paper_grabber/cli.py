@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from .cache import LookupCache
+from .chain import build_chain
 from .drive import DriveClient, DriveError
 from .gmail import GmailClient, GmailError
 from .imap_source import (
@@ -60,8 +61,11 @@ def _enrich_all(papers, args):
     cache = None if args.no_cache else LookupCache(args.cache)
     pairs, exhausted = [], False
     try:
-        with OpenAlexClient(
-            mailto=args.mailto, cache=cache, api_key=getattr(args, "api_key", None)
+        with build_chain(
+            mailto=args.mailto,
+            cache=cache,
+            api_key=getattr(args, "api_key", None),
+            use_openalex=not getattr(args, "no_openalex", False),
         ) as oa:
             for i, paper in enumerate(papers):
                 if i:
@@ -69,10 +73,12 @@ def _enrich_all(papers, args):
                 try:
                     pairs.append((paper, oa.enrich(paper)))
                 except RateLimited as exc:
+                    # The chain absorbs this and falls through to Crossref, so
+                    # reaching here means every source failed.
                     exhausted = True
                     wait = f" (retry in {exc.retry_after}s)" if exc.retry_after else ""
                     print(
-                        f"\nOpenAlex budget exhausted after {len(pairs)} lookups{wait}:"
+                        f"\nAll sources exhausted after {len(pairs)} lookups{wait}:"
                         f" {exc}\nContinuing with what was already resolved.",
                         file=sys.stderr,
                     )
@@ -542,6 +548,8 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     e.add_argument("--no-cache", action="store_true")
     e.add_argument("--api-key", help="OpenAlex API key (default: $OPENALEX_API_KEY)")
+    e.add_argument("--no-openalex", action="store_true",
+                   help="skip OpenAlex entirely; use only the free sources")
     e.set_defaults(func=cmd_enrich)
 
     d = sub.add_parser("download", help="parse, enrich, and save PDFs to a directory")
@@ -552,6 +560,8 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     d.add_argument("--no-cache", action="store_true")
     d.add_argument("--api-key", help="OpenAlex API key (default: $OPENALEX_API_KEY)")
+    d.add_argument("--no-openalex", action="store_true",
+                   help="skip OpenAlex entirely; use only the free sources")
     d.set_defaults(func=cmd_download)
 
     ft = sub.add_parser("fetch", help="download PDFs for accepted papers")
@@ -599,6 +609,8 @@ def main(argv: list[str] | None = None) -> int:
     ep.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     ep.add_argument("--no-cache", action="store_true")
     ep.add_argument("--api-key", help="OpenAlex API key (default: $OPENALEX_API_KEY)")
+    ep.add_argument("--no-openalex", action="store_true",
+                   help="skip OpenAlex entirely; use only the free sources")
     ep.set_defaults(func=cmd_enrich_pending)
 
     sv = sub.add_parser("serve", help="run the triage web app")

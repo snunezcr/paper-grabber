@@ -143,7 +143,8 @@ def make_refresh_job(
         # Imported here so this module stays importable without the whole
         # pipeline, which keeps the tests cheap.
         from .cache import LookupCache
-        from .enrich import OpenAlexClient, RateLimited
+        from .chain import build_chain
+        from .enrich import RateLimited
         from .ledger import Ledger
         from .models import AlertPaper
         from .parse import dedupe, parse_alert_email
@@ -171,7 +172,7 @@ def make_refresh_job(
                         enricher = enricher_factory()
                     else:
                         cache = LookupCache(cache_path) if cache_path else None
-                        enricher = OpenAlexClient(mailto=mailto, cache=cache)
+                        enricher = build_chain(mailto=mailto, cache=cache)
                     with enricher as oa:
                         for entry in ledger.needing_enrichment():
                             paper = AlertPaper(
