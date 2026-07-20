@@ -757,3 +757,25 @@ def test_sidebar_sticks_at_the_measured_header_height(client):
     assert "top: var(--header-h" in body
     assert "syncHeaderHeight" in body
     assert "ResizeObserver" in body
+
+
+def test_sidebar_can_be_collapsed(client):
+    body = client.get("/").text
+    assert 'id="sidebarcollapse"' in body
+    assert "sidebar-collapsed" in body
+
+
+def test_collapsed_sidebar_leaves_the_flow(client):
+    # Shrinking it to a stub would still cost width; display:none gives it back.
+    assert "body.sidebar-collapsed #sidebar { display: none; }" in client.get("/").text
+
+
+def test_collapse_choice_is_remembered(client):
+    body = client.get("/").text
+    assert "rs.sidebar.collapsed" in body
+    assert "localStorage" in body
+
+
+def test_collapse_state_is_not_restored_into_the_drawer(client):
+    # A drawer that opened itself on load would cover the papers.
+    assert "body.sidebar-collapsed #sidebar { display: block; }" in client.get("/").text

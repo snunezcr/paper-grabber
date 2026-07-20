@@ -90,7 +90,24 @@
     padding: 1rem .75rem 1rem 1rem;
     max-height: calc(100vh - var(--header-h, 6.5rem)); overflow-y: auto;
   }
-  #filtertoggle { display: none; }
+  #filtertoggle {
+    display: inline-flex; align-items: center; gap: .4rem;
+    margin: .45rem 0 0 1rem; min-height: 38px; padding: 0 .8rem;
+    cursor: pointer; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--card); color: var(--ink); font-size: .84rem;
+    font-weight: 600;
+  }
+  #sidebarcollapse {
+    position: absolute; top: .55rem; right: .35rem;
+    width: 30px; height: 30px; line-height: 1; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 7px;
+    background: var(--card); color: var(--muted); font-size: .9rem;
+  }
+  #sidebar { position: relative; }
+
+  /* Collapsed: the sidebar leaves the flow entirely so the content reclaims
+     its width, rather than shrinking to a stub that still costs space. */
+  body.sidebar-collapsed #sidebar { display: none; }
 
   .fgroup { border-bottom: 1px solid var(--line); padding-bottom: .5rem; }
   .fgroup > summary {
@@ -126,13 +143,10 @@
   }
 
   @media (max-width: 800px) {
-    #filtertoggle {
-      display: inline-flex; align-items: center; margin-top: .45rem;
-      min-height: 40px; padding: 0 .9rem; cursor: pointer;
-      border: 1px solid var(--line); border-radius: 8px;
-      background: var(--card); color: var(--ink); font-size: .85rem;
-      font-weight: 600;
-    }
+    #sidebarcollapse { display: none; }
+    /* Below this width the sidebar is a drawer, so "collapsed" is not a
+       separate state -- closed is the resting position. */
+    body.sidebar-collapsed #sidebar { display: block; }
     #sidebar {
       position: fixed; inset: 0 auto 0 0; z-index: 12; width: 17rem;
       max-height: none; background: var(--card);
@@ -293,6 +307,7 @@
 
 <div id="shell">
 <aside id="sidebar" aria-label="Filters">
+  <button id="sidebarcollapse" title="Hide filters" aria-label="Hide filters">&laquo;</button>
   <details class="fgroup" id="fg-alerts" open>
     <summary>Alerts <span class="sel" id="alertsel">All</span></summary>
     <div class="options">
@@ -1096,30 +1111,74 @@ $('#fg-alerts').querySelector('[data-none]').addEventListener('click', () => {
 
 const sidebar = $('#sidebar');
 const filterToggle = $('#filtertoggle');
+const COLLAPSE_KEY = 'rs.sidebar.collapsed';
 
-function setSidebar(open) {
+// Two different behaviours share one button. Wide: the sidebar sits in the
+// flow and collapsing gives its width back to the content. Narrow: it is a
+// drawer, and closed is simply its resting state.
+const isNarrow = () => window.innerWidth <= 800;
+
+function setDrawer(open) {
   sidebar.classList.toggle('open', open);
   filterToggle.setAttribute('aria-expanded', String(open));
+  updateFilterToggle();
 }
 
-filterToggle.addEventListener('click', () => {
-  setSidebar(!sidebar.classList.contains('open'));
+function setCollapsed(collapsed, {remember = true} = {}) {
+  document.body.classList.toggle('sidebar-collapsed', collapsed);
+  filterToggle.setAttribute('aria-expanded', String(!collapsed));
+  updateFilterToggle();
+  if (remember) {
+    try { localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0'); } catch (e) {}
+  }
+}
+
+function sidebarIsShowing() {
+  return isNarrow()
+    ? sidebar.classList.contains('open')
+    : !document.body.classList.contains('sidebar-collapsed');
+}
+
+function toggleSidebar() {
+  if (isNarrow()) setDrawer(!sidebar.classList.contains('open'));
+  else setCollapsed(sidebarIsShowing());
+}
+
+filterToggle.addEventListener('click', toggleSidebar);
+$('#sidebarcollapse').addEventListener('click', () => setCollapsed(true));
+
+// Restore the choice, but only for the wide layout -- a drawer that opened
+// itself on load would cover the papers.
+try {
+  setCollapsed(localStorage.getItem(COLLAPSE_KEY) === '1', {remember: false});
+} catch (e) {}
+
+// Crossing the breakpoint must not leave a drawer stuck open over the
+// content, or a collapsed body class hiding a drawer that should be usable.
+window.addEventListener('resize', () => {
+  if (!isNarrow()) setDrawer(false);
+  updateFilterToggle();
 });
 
 // Tapping a card should not leave the drawer covering the content.
 document.addEventListener('click', e => {
-  if (window.innerWidth > 800) return;
+  if (!isNarrow()) return;
   if (!sidebar.classList.contains('open')) return;
   if (sidebar.contains(e.target) || filterToggle.contains(e.target)) return;
   setSidebar(false);
 });
 
+function updateFilterToggle() {
+  filterToggle.textContent = sidebarIsShowing() ? 'Hide filters' : 'Filters';
+}
+
 // Filters apply to the triage queue only, for now.
 function syncSidebarVisibility() {
   const relevant = state.tab === 'triage';
   sidebar.style.display = relevant ? '' : 'none';
-  filterToggle.style.visibility = relevant ? '' : 'hidden';
-  if (!relevant) setSidebar(false);
+  filterToggle.style.display = relevant ? '' : 'none';
+  if (!relevant) setDrawer(false);
+  updateFilterToggle();
 }
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
