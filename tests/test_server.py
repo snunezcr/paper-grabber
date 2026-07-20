@@ -578,3 +578,30 @@ def test_counts_move_from_processed_to_filed(seeded):
 
 def test_processed_cards_have_a_check_button(app_client):
     assert 'class="verify"' in app_client.get("/").text
+
+
+def test_drive_only_token_does_not_use_gmail(tmp_path, monkeypatch):
+    # A Drive-only token handed to the Gmail API fails with "insufficient
+    # authentication scopes" only when a request is made -- long after the UI
+    # has claimed everything is fine.
+    import json
+
+    from paper_grabber.oauth_web import WebOAuth
+
+    token = tmp_path / "token.json"
+    token.write_text(json.dumps({
+        "token": "at", "refresh_token": "rt",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "client_id": "cid", "client_secret": "cs",
+        "scopes": ["https://www.googleapis.com/auth/drive.file"],
+    }))
+    oauth = WebOAuth(credentials_path=tmp_path / "none.json", token_path=token)
+
+    monkeypatch.setenv("PAPER_GRABBER_IMAP_USER", "me@example.com")
+    monkeypatch.setenv("PAPER_GRABBER_IMAP_PASSWORD", "app-password")
+
+    app = create_app(tmp_path / "s.db", oauth=oauth)
+    c = TestClient(app)
+    status = c.get("/api/auth/status").json()
+    assert status["needs_reauth"] is True
+    assert status["has_gmail"] is False

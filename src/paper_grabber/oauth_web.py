@@ -27,8 +27,10 @@ from .google_auth import DEFAULT_CREDENTIALS, DEFAULT_TOKEN, _save
 # Mail over the Gmail API, plus Drive. gmail.readonly is a *restricted* scope:
 # the app must be published (not "Testing") or its refresh tokens expire after
 # seven days, silently breaking the scheduled run once a week.
+GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
+
 WEB_SCOPES = [
-    "https://www.googleapis.com/auth/gmail.readonly",
+    GMAIL_READONLY,
     "https://www.googleapis.com/auth/drive.file",
     "https://www.googleapis.com/auth/drive.metadata.readonly",
 ]
@@ -72,23 +74,46 @@ class WebOAuth:
     # --- status ---------------------------------------------------------------
 
     def credentials(self) -> Credentials | None:
-        """Stored credentials, or None if the user has not signed in."""
+        """Stored credentials, or None if the user has not signed in.
+
+        Loaded with the scopes the token actually carries, never with the ones
+        we would like it to have: passing our own list makes the object claim
+        access it may not hold, and the lie only surfaces when Google refuses
+        a call with "insufficient authentication scopes".
+        """
         if not self.token_path.exists():
             return None
         try:
-            return Credentials.from_authorized_user_file(str(self.token_path), self.scopes)
+            return Credentials.from_authorized_user_file(str(self.token_path))
         except ValueError:
-            # A token written for a different scope set is not usable here;
-            # treat it as absent so the UI offers sign-in rather than erroring.
             return None
+
+    def granted_scopes(self) -> set[str]:
+        creds = self.credentials()
+        return set(creds.scopes or []) if creds else set()
+
+    def missing_scopes(self, required: list[str] | None = None) -> list[str]:
+        """Scopes this app needs that the stored token does not have."""
+        required = required or self.scopes
+        granted = self.granted_scopes()
+        return [s for s in required if s not in granted]
+
+    def has_scope(self, scope: str) -> bool:
+        return scope in self.granted_scopes()
 
     def status(self) -> dict[str, object]:
         creds = self.credentials()
+        missing = self.missing_scopes()
         return {
             "signed_in": bool(creds),
             "valid": bool(creds and creds.valid),
             "refreshable": bool(creds and creds.refresh_token),
-            "scopes": list(creds.scopes) if creds and creds.scopes else [],
+            "scopes": sorted(self.granted_scopes()),
+            "missing_scopes": missing,
+            # Signing in again is the only way to widen a grant, so the UI must
+            # be able to tell "not signed in" from "signed in but too narrow".
+            "needs_reauth": bool(creds) and bool(missing),
+            "has_gmail": GMAIL_READONLY in self.granted_scopes(),
             "has_client_secrets": self.credentials_path.exists(),
         }
 

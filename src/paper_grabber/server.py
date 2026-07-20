@@ -90,12 +90,18 @@ def create_app(
     auth = oauth or WebOAuth()
 
     def default_source():
-        """Mail source for a manual check: the signed-in account, else IMAP."""
+        """Mail source for a manual check: the signed-in account, else IMAP.
+
+        The Gmail path is used only when the token really carries the Gmail
+        scope. A Drive-only token would otherwise be handed to the Gmail API
+        and fail with "insufficient authentication scopes" at call time.
+        """
         from .gmail import GmailClient
         from .imap_source import ImapAlertSource, ImapConfig
+        from .oauth_web import GMAIL_READONLY
 
         creds = auth.credentials()
-        if creds is not None:
+        if creds is not None and auth.has_scope(GMAIL_READONLY):
             client = GmailClient(creds)
 
             class _Adapter:
@@ -400,6 +406,7 @@ def create_app(
                     "drive-browse",
                     "processed",
                     "verify",
+                    "scope-check",
                 }
             ),
         }

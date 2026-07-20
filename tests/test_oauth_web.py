@@ -396,3 +396,53 @@ def test_app_page_clears_the_signed_in_parameter(client):
     # not repeat the confirmation.
     assert "signed_in" in c.get("/").text
     assert "replaceState" in c.get("/").text
+
+
+# --- scope honesty ------------------------------------------------------------
+
+
+def test_status_reports_the_scopes_actually_granted(paths):
+    creds, token = paths
+    write_token(token, scopes=["https://www.googleapis.com/auth/drive.file"])
+    s = WebOAuth(credentials_path=creds, token_path=token).status()
+    # The token must not be described as having scopes it never received.
+    assert s["scopes"] == ["https://www.googleapis.com/auth/drive.file"]
+    assert s["has_gmail"] is False
+
+
+def test_drive_only_token_needs_reauth(paths):
+    creds, token = paths
+    write_token(token, scopes=[
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/drive.metadata.readonly",
+    ])
+    s = WebOAuth(credentials_path=creds, token_path=token).status()
+    assert s["signed_in"] is True
+    assert s["needs_reauth"] is True
+    assert s["missing_scopes"] == ["https://www.googleapis.com/auth/gmail.readonly"]
+
+
+def test_full_token_needs_no_reauth(paths):
+    creds, token = paths
+    write_token(token)          # WEB_SCOPES
+    s = WebOAuth(credentials_path=creds, token_path=token).status()
+    assert s["needs_reauth"] is False
+    assert s["has_gmail"] is True
+    assert s["missing_scopes"] == []
+
+
+def test_has_scope_reflects_the_token(paths):
+    from paper_grabber.oauth_web import GMAIL_READONLY
+
+    creds, token = paths
+    write_token(token, scopes=["https://www.googleapis.com/auth/drive.file"])
+    o = WebOAuth(credentials_path=creds, token_path=token)
+    assert o.has_scope(GMAIL_READONLY) is False
+    assert o.has_scope("https://www.googleapis.com/auth/drive.file") is True
+
+
+def test_no_token_means_no_scopes(paths):
+    creds, token = paths
+    o = WebOAuth(credentials_path=creds, token_path=token)
+    assert o.granted_scopes() == set()
+    assert o.status()["needs_reauth"] is False   # not signed in at all

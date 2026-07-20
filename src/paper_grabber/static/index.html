@@ -267,7 +267,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
 let state = { tab: 'triage', selected: new Set(), base: null, sheet: null };
 
 // Capabilities this page expects the server to have.
-const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify'];
+const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check'];
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -742,7 +742,16 @@ async function loadAuth() {
     bar.classList.toggle('warn', !s.redirect_ok || !s.has_client_secrets);
     $('#signout').hidden = !s.signed_in;
 
-    if (s.signed_in) {
+    if (s.needs_reauth) {
+      // Signed in, but the grant is too narrow. Only a fresh consent widens
+      // it, so offer the button again rather than reporting success.
+      bar.classList.remove('ok');
+      bar.classList.add('warn');
+      $('#authmsg').textContent = s.has_gmail
+        ? 'Signed in, but missing some permissions — sign in again'
+        : 'Signed in for Drive only. Sign in again to grant Gmail access, ' +
+          'or mail will fall back to IMAP.';
+    } else if (s.signed_in) {
       $('#authmsg').textContent = s.valid
         ? 'Signed in to Google'
         : 'Signed in; access will renew automatically';
