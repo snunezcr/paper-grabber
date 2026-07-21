@@ -118,6 +118,29 @@ token all move unchanged. Confirm the env file is owner-only on the server:
 chmod 600 ~/.config/paper-grabber/env
 ```
 
+## 4b. Optional settings
+
+`~/.config/paper-grabber/env` on the server holds configuration that survives
+updates (the systemd unit reads it, and a `git pull` cannot overwrite it):
+
+```bash
+PG_REFRESH_DAYS=90     # how far back Check now looks (default 7)
+PG_MAX_PDF_MB=250      # download size cap (default 100)
+OPENALEX_API_KEY=...   # raises the metered daily allowance
+OPENALEX_MAILTO=...
+```
+
+Restart after changing it:
+
+```bash
+systemctl --user restart research-stream.service
+```
+
+A wide window costs nothing on later runs -- already-processed messages are
+skipped by message id -- but the *first* check after widening will pull
+everything in that window at once, and each new paper costs one OpenAlex
+lookup.
+
 ## 5. Point Google at the server's HTTPS name
 
 The OAuth redirect URI must match the origin the browser uses. In the Google

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -180,6 +181,21 @@ def cmd_download(args) -> int:
     if saved:
         print(f"awaiting Drive upload in {staging.root}")
     return 0
+
+
+def _default_refresh_days() -> int:
+    """How far back a manual check looks, from PG_REFRESH_DAYS.
+
+    Configurable rather than hardcoded so a deployment can widen the window in
+    its env file, which survives an update; editing the systemd unit would be
+    overwritten by the next `git pull`.
+    """
+    raw = os.environ.get("PG_REFRESH_DAYS", "7")
+    try:
+        days = int(raw)
+    except ValueError:
+        days = 7
+    return max(1, days)
 
 
 DEFAULT_LEDGER = Path.home() / ".local" / "share" / "paper-grabber" / "state.db"
@@ -741,8 +757,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="bind a public interface despite there being no auth")
     sv.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     sv.add_argument("--mailto", help="contact address for OpenAlex's polite pool")
-    sv.add_argument("--days", type=int, default=7,
-                    help="how far back a manual check looks")
+    sv.add_argument("--days", type=int, default=_default_refresh_days(),
+                    help="how far back a manual check looks "
+                         "(default: $PG_REFRESH_DAYS or 7)")
     sv.set_defaults(func=cmd_serve)
 
     pd = sub.add_parser("pending", help="list papers awaiting triage")
