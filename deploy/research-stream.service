@@ -12,6 +12,11 @@ Type=exec
 # them.
 EnvironmentFile=%h/.config/paper-grabber/env
 
+# credentials.json is resolved relative to the working directory, so the
+# service must run from inside the repo -- otherwise sign-in reports
+# "No credentials.json on the server".
+WorkingDirectory=%h/paper-grabber
+
 # Bind loopback only. The app has NO authentication; Tailscale is what makes it
 # reachable, and only from your own devices. Never bind a public interface.
 ExecStart=%h/paper-grabber/.venv/bin/paper-grabber serve --host 127.0.0.1 --port 8823
