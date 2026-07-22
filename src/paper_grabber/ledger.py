@@ -135,6 +135,14 @@ def paper_view(p: LedgerPaper) -> dict[str, Any]:
         "note": p.note,
         "staged": p.staged_name is not None,
         "uploaded": p.drive_file_id is not None,
+        # An open-access location the server could fetch from on its own,
+        # separate from any copy we already hold. When false the paper can only
+        # be filed by attaching a local PDF.
+        "has_oa_pdf": bool(
+            e.get("pdf_candidates")
+            or e.get("pdf_url")
+            or _scholar_pdf_url(d.get("url"))
+        ),
         # Whether the reader can show it: a copy we hold, or somewhere to
         # fetch one from. has_pdf is not enough -- Scholar's [PDF] badge often
         # points at a landing page.

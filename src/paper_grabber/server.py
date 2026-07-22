@@ -17,7 +17,7 @@ from html import escape as html_escape
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.staticfiles import StaticFiles
 from fastapi import Request
 from fastapi.responses import (
@@ -33,6 +33,7 @@ from pydantic import BaseModel
 from .drive import DriveClient, DriveError
 from .google_auth import DRIVE_SCOPES, AuthError, load_credentials
 from .refresh import RefreshRunner, make_refresh_job
+from .filename import deduplicate_filename, pdf_filename
 from .staging import StagingArea
 from .uploader import UploadRunner, make_upload_job
 from .oauth_web import (
@@ -365,6 +366,54 @@ def create_app(
                 "counts": led.counts(),
             }
 
+    @app.post("/api/papers/{key}/local-pdf")
+    async def upload_local_pdf(key: str, file: UploadFile = File(...)) -> dict[str, Any]:
+        """Attach a PDF the user picked from their device.
+
+        For papers with no open-access copy the pipeline cannot fetch: the
+        user supplies the file, it is staged, and the normal upload-to-Drive
+        then sends that instead of trying a download. Validated by its leading
+        bytes -- a browser's file type is only a hint, and a mislabelled
+        upload would otherwise reach Drive as a broken paper.
+        """
+        from .fetch import DEFAULT_MAX_BYTES, looks_like_pdf
+
+        with open_ledger() as led:
+            paper = led.get(key)
+            if paper is None:
+                raise HTTPException(status_code=404, detail="no such paper")
+            if paper.drive_file_id:
+                raise HTTPException(
+                    status_code=409, detail="already in Drive; nothing to attach"
+                )
+            existing_name = paper.staged_name
+            view = paper_view(paper)
+
+        # Bounded read: one byte over the cap is enough to know it is too big,
+        # without pulling a huge file into the VM's memory.
+        data = await file.read(DEFAULT_MAX_BYTES + 1)
+        if len(data) > DEFAULT_MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"file exceeds the {DEFAULT_MAX_BYTES // (1024*1024)} MB limit",
+            )
+        if not looks_like_pdf(data):
+            raise HTTPException(status_code=400, detail="that file is not a PDF")
+
+        staging = StagingArea(staging_path or (ledger_path.parent / "staging"))
+        # Reuse the existing name when replacing, so a second attach overwrites
+        # rather than leaving an orphan staged file behind.
+        name = existing_name or deduplicate_filename(
+            pdf_filename(view["title"], view["year"]),
+            {p.name for p in staging.pending()},
+        )
+        staging.stage(name, data)
+
+        with open_ledger() as led:
+            led.set_staged(key, name)
+
+        return {"key": key, "staged": True, "name": name}
+
     @app.post("/api/papers/{key}/verify")
     def verify(key: str) -> dict[str, Any]:
         """Check a processed paper is still in Drive; requeue it if not."""
@@ -622,6 +671,7 @@ def create_app(
                     "bibtex",
                     "suggestions",
                     "reader",
+                    "local-pdf",
                     "bulk-decision",
                     "rejected",
                     "notes",

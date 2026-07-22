@@ -1487,3 +1487,118 @@ def test_auth_button_toggles_sign_in_and_out(client):
     assert "state.authSignedIn" in body
     assert "'/api/auth/signout'" in body
     assert "'/auth/google/start'" in body
+
+
+# --- attaching a local PDF ----------------------------------------------------
+
+
+REAL_PDF = b"%PDF-1.7\n" + b"local upload " * 40 + b"\n%%EOF\n"
+
+
+def closed_access_key(seeded):
+    """An accepted paper with no open-access location."""
+    with Ledger(seeded) as led:
+        led.record(AlertPaper(title="Closed Paper", year=2026,
+                              url="https://dl.acm.org/doi/abs/10.1/x"))
+        key = [p.key for p in led.pending() if "Closed" in p.title][0]
+        led.decide_by_key(key, Decision.ACCEPTED)
+    return key
+
+
+def test_has_oa_pdf_flags_the_manual_case(seeded):
+    key = closed_access_key(seeded)
+    c = TestClient(create_app(seeded))
+    p = next(x for x in c.get("/api/accepted").json()["unfiled"] if x["key"] == key)
+    assert p["has_oa_pdf"] is False
+
+
+def test_a_valid_pdf_is_attached_and_staged(seeded, tmp_path):
+    key = closed_access_key(seeded)
+    c = TestClient(create_app(seeded, staging_path=tmp_path / "staging"))
+    r = c.post(f"/api/papers/{key}/local-pdf",
+               files={"file": ("paper.pdf", REAL_PDF, "application/pdf")})
+    assert r.status_code == 200
+    assert r.json()["staged"] is True
+    with Ledger(seeded) as led:
+        name = led.get(key).staged_name
+    assert name
+    assert (tmp_path / "staging" / name).read_bytes() == REAL_PDF
+
+
+def test_a_non_pdf_is_refused_by_its_bytes(seeded, tmp_path):
+    # A browser's content-type is only a hint; the magic bytes are the truth.
+    key = closed_access_key(seeded)
+    c = TestClient(create_app(seeded, staging_path=tmp_path / "s"))
+    r = c.post(f"/api/papers/{key}/local-pdf",
+               files={"file": ("fake.pdf", b"<html>not a pdf</html>", "application/pdf")})
+    assert r.status_code == 400
+    assert "not a PDF" in r.json()["detail"]
+    with Ledger(seeded) as led:
+        assert led.get(key).staged_name is None
+
+
+def test_reattaching_replaces_without_orphaning(seeded, tmp_path):
+    key = closed_access_key(seeded)
+    c = TestClient(create_app(seeded, staging_path=tmp_path / "staging"))
+    c.post(f"/api/papers/{key}/local-pdf",
+           files={"file": ("a.pdf", REAL_PDF, "application/pdf")})
+    second = b"%PDF-1.7\nreplacement\n%%EOF\n"
+    c.post(f"/api/papers/{key}/local-pdf",
+           files={"file": ("b.pdf", second, "application/pdf")})
+
+    staged = list((tmp_path / "staging").glob("*.pdf"))
+    assert len(staged) == 1                       # replaced, not duplicated
+    assert staged[0].read_bytes() == second
+
+
+def test_attaching_to_an_uploaded_paper_is_refused(seeded, tmp_path):
+    key = closed_access_key(seeded)
+    with Ledger(seeded) as led:
+        led.set_uploaded(key, "DRIVE1")
+    c = TestClient(create_app(seeded, staging_path=tmp_path / "s"))
+    r = c.post(f"/api/papers/{key}/local-pdf",
+               files={"file": ("a.pdf", REAL_PDF, "application/pdf")})
+    assert r.status_code == 409
+
+
+def test_the_attached_file_is_what_uploads_to_drive(seeded, tmp_path, monkeypatch):
+    # The point of the feature: a closed-access paper reaches Drive from the
+    # user's file, never from a download attempt.
+    key = closed_access_key(seeded)
+    staging = tmp_path / "staging"
+    c = TestClient(create_app(seeded, staging_path=staging))
+    c.post(f"/api/papers/{key}/local-pdf",
+           files={"file": ("mine.pdf", REAL_PDF, "application/pdf")})
+
+    with Ledger(seeded) as led:
+        led.set_destination(key, "F1", "Quantum")
+        staged_name = led.get(key).staged_name
+
+    # A download must never be attempted for this paper.
+    import paper_grabber.fetch as fetch_mod
+    monkeypatch.setattr(fetch_mod, "download_first_available",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("fetched!")))
+
+    import hashlib
+    from paper_grabber.staging import RemoteFile
+    from paper_grabber.uploader import make_upload_job
+
+    class Drive:
+        def __init__(self): self.uploaded = None
+        def upload(self, path, *, folder_id, name=None, description=None):
+            self.uploaded = path.read_bytes()
+            return RemoteFile(file_id="D1", size=len(self.uploaded),
+                              md5=hashlib.md5(self.uploaded).hexdigest())
+        def close(self): pass
+
+    drive = Drive()
+    make_upload_job(ledger_path=seeded, staging_path=staging, keys=[key],
+                    drive_factory=lambda: drive)()
+    assert drive.uploaded == REAL_PDF             # the user's file, verbatim
+
+
+def test_page_has_the_attach_control(client):
+    body = client.get("/").text
+    assert 'id="localfile"' in body
+    assert "function attachBtn" in body
+    assert "/local-pdf" in body

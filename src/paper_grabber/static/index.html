@@ -595,6 +595,8 @@
 
 <button id="undo" hidden>Undo</button>
 
+<input id="localfile" type="file" accept="application/pdf,.pdf" hidden>
+
 <div id="reader" hidden>
   <div class="rdtop">
     <span class="rdtitle" id="rdtitle"></span>
@@ -661,6 +663,7 @@ const $ = s => document.querySelector(s);
 const ICONS = {
   check: '<path d="M20 6 9 17l-5-5"/>',
   x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  'file-up': '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M12 12v6"/><path d="m15 15-3-3-3 3"/>',
   'folder-input':
     '<path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1"/><path d="M2 13h10"/><path d="m9 16 3-3-3-3"/>',
   pencil: '<path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>',
@@ -783,7 +786,7 @@ let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               readerPaper: null, authSignedIn: false };
 
 // Capabilities this page expects the server to have.
-const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader'];
+const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf'];
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -862,8 +865,14 @@ function cardLinks(p) {
   const pdf = hasPdfFile(p)
     ? '<button type="button" class="pdflink">PDF</button>'
     : link(p.pdf_url, 'PDF');
+  // A manually attached file: staged, but with no open-access source of its
+  // own. Opens the reader on that local copy.
+  const local = (p.staged && !p.has_oa_pdf)
+    ? '<button type="button" class="pdflink locallink">local</button>'
+    : '';
   const parts = [
     pdf,
+    local,
     link(p.doi_url, 'DOI'),
     link(p.source_url, esc(p.source_label || 'Publisher')),
   ].filter(Boolean);
@@ -871,7 +880,9 @@ function cardLinks(p) {
 }
 
 function wirePdfLink(el, p) {
-  el.querySelector('.pdflink')?.addEventListener('click', () => openReader(p));
+  // Both the PDF and local links open the reader on whatever copy we have.
+  el.querySelectorAll('.pdflink').forEach(b =>
+    b.addEventListener('click', () => openReader(p)));
 }
 
 function cardBody(p) {
@@ -1156,6 +1167,7 @@ function filingCard(p, {selectable}) {
     const hint = state.suggestions?.[p.key];
     actions.innerHTML = `
       ${hint ? `<button class="suggest" data-tip="${esc(hint.reason)}">${icon('folder-input')}<span>${esc(hint.folder_name)}</span></button>` : ''}
+      ${attachBtn(p)}
       ${hasPdfFile(p) ? iconBtn('read', 'book-open', 'Read with notes') : ''}
       <span class="cardstatus" hidden></span>
       ${iconBtn('note' + (p.note ? ' has-note' : ''), 'pencil',
@@ -1163,6 +1175,7 @@ function filingCard(p, {selectable}) {
       ${iconBtn('cite', 'quote', 'Copy BibTeX')}`;
     actions.querySelector('.note').addEventListener('click', () => editNote(p));
     actions.querySelector('.read')?.addEventListener('click', () => openReader(p));
+    wireAttach(el, p);
     if (hint) {
       actions.querySelector('.suggest')
         .addEventListener('click', () => acceptSuggestion(p, hint, el));
@@ -1182,6 +1195,7 @@ function filingCard(p, {selectable}) {
       actions.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
     } else {
       actions.innerHTML = `
+        ${attachBtn(p)}
         ${hasPdfFile(p) ? iconBtn('read', 'book-open', 'Read with notes') : ''}
         ${iconBtn('up', 'cloud-upload', 'Upload to Drive')}
         ${iconBtn('unfile', 'corner-up-left', 'Not yet — clear the destination')}
@@ -1191,6 +1205,7 @@ function filingCard(p, {selectable}) {
         ${iconBtn('cite', 'quote', 'Copy BibTeX')}`;
       actions.querySelector('.note').addEventListener('click', () => editNote(p));
       actions.querySelector('.read')?.addEventListener('click', () => openReader(p));
+      wireAttach(el, p);
       actions.querySelector('.up').addEventListener('click', () => uploadOne(p, el));
       actions.querySelector('.unfile').addEventListener('click', () => unfile(p));
       actions.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
@@ -1527,6 +1542,50 @@ async function loadSuggestions() {
     state.suggestions = data.suggestions || {};
   } catch (e) { state.suggestions = {}; }
 }
+
+// Papers with no open-access PDF are filed by attaching a local one. The
+// button stays after attaching, so the file can be replaced.
+function attachBtn(p) {
+  if (p.has_oa_pdf || p.uploaded) return '';
+  return iconBtn('attach', 'file-up',
+    p.staged ? 'Replace the attached PDF' : 'Attach a PDF from this device');
+}
+
+let pendingAttach = null;
+
+function wireAttach(el, p) {
+  el.querySelector('.attach')?.addEventListener('click', () => {
+    pendingAttach = {paper: p, card: el};
+    const input = $('#localfile');
+    input.value = '';          // let the same file be re-picked
+    input.click();
+  });
+}
+
+$('#localfile').addEventListener('change', async () => {
+  const input = $('#localfile');
+  const file = input.files[0];
+  if (!file || !pendingAttach) return;
+  const {paper, card} = pendingAttach;
+  pendingAttach = null;
+  cardStatus(card, 'Attaching…');
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    // Raw fetch, not api(): the browser must set the multipart boundary itself.
+    const r = await fetch(`/api/papers/${encodeURIComponent(paper.key)}/local-pdf`,
+      {method: 'POST', body: form});
+    if (!r.ok) {
+      let detail = `HTTP ${r.status}`;
+      try { detail = (await r.json()).detail || detail; } catch {}
+      throw new Error(detail);
+    }
+    showNotice('PDF attached');
+    loadFiling();
+  } catch (e) {
+    cardStatus(card, `Could not attach: ${e.message}`, {bad: true});
+  }
+});
 
 async function loadFiling() {
   try {
