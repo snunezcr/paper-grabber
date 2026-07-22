@@ -414,6 +414,36 @@ def create_app(
 
         return {"key": key, "staged": True, "name": name}
 
+    @app.delete("/api/papers/{key}/local-pdf")
+    def remove_local_pdf(key: str) -> dict[str, Any]:
+        """Detach a manually-supplied PDF, returning the card to its usual state.
+
+        The counterpart to attaching: it drops the ledger's reference and
+        deletes the staged file, so the paper is once again one with no PDF.
+        A paper already in Drive is left untouched -- there the file has served
+        its purpose and the reference is gone already.
+        """
+        with open_ledger() as led:
+            paper = led.get(key)
+            if paper is None:
+                raise HTTPException(status_code=404, detail="no such paper")
+            if paper.drive_file_id:
+                raise HTTPException(
+                    status_code=409, detail="already in Drive; nothing to detach"
+                )
+            name = paper.staged_name
+            if not name:
+                raise HTTPException(status_code=404, detail="no attached file")
+            led.set_staged(key, None)
+
+        # Best-effort: the reference is already gone, so a missing file is not
+        # an error -- the card is back to its usual state regardless.
+        staged = StagingArea(
+            staging_path or (ledger_path.parent / "staging")
+        ).path_for(name)
+        staged.unlink(missing_ok=True)
+        return {"key": key, "staged": False}
+
     @app.post("/api/papers/{key}/verify")
     def verify(key: str) -> dict[str, Any]:
         """Check a processed paper is still in Drive; requeue it if not."""

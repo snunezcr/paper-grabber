@@ -1606,3 +1606,64 @@ def test_page_has_the_attach_control(client):
     # wiring; wiring against the card would find nothing and the click would
     # do nothing. Guard that regression.
     assert "wireAttach(actions, p, el)" in body
+
+
+# --- detaching a local PDF ----------------------------------------------------
+
+
+def test_detach_removes_the_reference_and_the_file(seeded, tmp_path):
+    key = closed_access_key(seeded)
+    staging = tmp_path / "staging"
+    c = TestClient(create_app(seeded, staging_path=staging))
+    c.post(f"/api/papers/{key}/local-pdf",
+           files={"file": ("a.pdf", REAL_PDF, "application/pdf")})
+    with Ledger(seeded) as led:
+        name = led.get(key).staged_name
+    assert (staging / name).exists()
+
+    r = c.delete(f"/api/papers/{key}/local-pdf")
+    assert r.status_code == 200
+    assert r.json()["staged"] is False
+    with Ledger(seeded) as led:
+        assert led.get(key).staged_name is None          # card back to usual
+    assert not (staging / name).exists()                 # file gone
+
+
+def test_detach_when_nothing_attached_is_404(seeded, tmp_path):
+    key = closed_access_key(seeded)
+    c = TestClient(create_app(seeded, staging_path=tmp_path / "s"))
+    r = c.delete(f"/api/papers/{key}/local-pdf")
+    assert r.status_code == 404
+
+
+def test_detach_after_drive_upload_is_refused(seeded, tmp_path):
+    key = closed_access_key(seeded)
+    with Ledger(seeded) as led:
+        led.set_uploaded(key, "DRIVE1")
+    c = TestClient(create_app(seeded, staging_path=tmp_path / "s"))
+    r = c.delete(f"/api/papers/{key}/local-pdf")
+    assert r.status_code == 409
+
+
+def test_detach_tolerates_a_missing_staged_file(seeded, tmp_path):
+    # The reference is the source of truth; a hand-deleted file must not wedge
+    # the card in an attached state.
+    key = closed_access_key(seeded)
+    staging = tmp_path / "staging"
+    c = TestClient(create_app(seeded, staging_path=staging))
+    c.post(f"/api/papers/{key}/local-pdf",
+           files={"file": ("a.pdf", REAL_PDF, "application/pdf")})
+    with Ledger(seeded) as led:
+        (staging / led.get(key).staged_name).unlink()
+
+    r = c.delete(f"/api/papers/{key}/local-pdf")
+    assert r.status_code == 200
+    with Ledger(seeded) as led:
+        assert led.get(key).staged_name is None
+
+
+def test_page_has_the_detach_control(client):
+    body = client.get("/").text
+    assert "function detachLocal" in body
+    assert "'trash-2'" in body
+    assert "method: 'DELETE'" in body
