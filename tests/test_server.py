@@ -1675,3 +1675,32 @@ def test_counts_bar_shows_acceptance_rate(client):
     body = client.get("/").text
     assert "const triaged = (c.accepted || 0) + (c.rejected || 0);" in body
     assert "in Drive${rate}" in body
+
+
+def test_status_banners_are_live_regions(client):
+    # Screen readers announce a text change only inside a live region; without
+    # these, "PDF attached" and errors are silent.
+    body = client.get("/").text
+    assert '<div id="error" role="alert" aria-live="assertive"' in body
+    assert '<div id="notice" role="status" aria-live="polite"' in body
+    # And the text must be written while displayed, or the change isn't spoken.
+    assert "el.hidden = false;\n  el.textContent = msg;" in body
+
+
+def test_overlays_are_modal_dialogs(client):
+    body = client.get("/").text
+    assert 'id="notepanel" role="dialog" aria-modal="true"' in body
+    assert 'id="sheet" role="dialog" aria-modal="true"' in body
+
+
+def test_overlays_trap_and_restore_focus(client):
+    body = client.get("/").text
+    assert "function trapFocus" in body
+    assert "function releaseFocus" in body
+    # Both overlays install a trap and release it on close.
+    assert "state.noteTrap = trapFocus(notePanel" in body
+    assert "state.sheetTrap = trapFocus($('#sheet')" in body
+    assert "releaseFocus(state.noteTrap)" in body
+    assert "releaseFocus(state.sheetTrap)" in body
+    # Escape closes the sheet as well as the note drawer.
+    assert "else if (!$('#sheet').hidden) closeSheet();" in body

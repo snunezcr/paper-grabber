@@ -553,8 +553,8 @@
 </aside>
 
 <main>
-  <div id="error" hidden></div>
-  <div id="notice" hidden></div>
+  <div id="error" role="alert" aria-live="assertive" hidden></div>
+  <div id="notice" role="status" aria-live="polite" hidden></div>
 
   <section id="view-triage">
     <div id="list"></div>
@@ -617,7 +617,7 @@
   </div>
 </div>
 
-<aside id="notepanel" aria-label="Side panel" hidden>
+<aside id="notepanel" role="dialog" aria-modal="true" aria-labelledby="nplabel" hidden>
   <div class="nphead">
     <span class="nplabel" id="nplabel">Note</span>
     <button id="notecancel" aria-label="Close" data-tip="Close"></button>
@@ -638,7 +638,7 @@
 </aside>
 
 
-<div id="sheet" hidden>
+<div id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheettitle" hidden>
   <header>
     <div class="titlebar"><h1 id="sheettitle">Choose a folder</h1></div>
     <div id="crumbs"></div>
@@ -823,8 +823,10 @@ async function checkServerVersion() {
 
 function showError(msg) {
   const el = $('#error');
-  el.textContent = msg;
+  // Unhide before writing the text. A live region is announced on a text
+  // change only while it is displayed, so the order is what makes it spoken.
   el.hidden = false;
+  el.textContent = msg;
   clearTimeout(showError.t);
   showError.t = setTimeout(() => { el.hidden = true; }, 6000);
 }
@@ -1221,6 +1223,47 @@ function filingCard(p, {selectable}) {
   return el;
 }
 
+// ---------- modal focus management ----------
+// A dialog keeps Tab inside itself and hands focus back to whatever opened it
+// when it closes, so a keyboard or screen-reader user is never stranded behind
+// the overlay. The focusable set is recomputed on each Tab, so controls the
+// dialog adds while open (a folder list, say) are included.
+const FOCUSABLE =
+  'a[href],button:not([disabled]),input:not([disabled]),' +
+  'textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
+
+function visibleFocusables(root) {
+  return [...root.querySelectorAll(FOCUSABLE)]
+    .filter(el => !el.hidden && el.offsetParent !== null);
+}
+
+function trapFocus(root, initial) {
+  const opener = document.activeElement;
+  const onKey = e => {
+    if (e.key !== 'Tab') return;
+    const items = visibleFocusables(root);
+    if (!items.length) { e.preventDefault(); return; }
+    const first = items[0], last = items[items.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && (active === first || !root.contains(active))) {
+      e.preventDefault(); last.focus();
+    } else if (!e.shiftKey && (active === last || !root.contains(active))) {
+      e.preventDefault(); first.focus();
+    }
+  };
+  root.addEventListener('keydown', onKey);
+  (initial || visibleFocusables(root)[0])?.focus();
+  return {root, onKey, opener};
+}
+
+function releaseFocus(trap) {
+  if (!trap) return;
+  trap.root.removeEventListener('keydown', trap.onKey);
+  // Return focus to the opener if it is still in the document; a re-render may
+  // have replaced the card it lived on, in which case leave focus be.
+  if (trap.opener && document.contains(trap.opener)) trap.opener.focus();
+}
+
 const notePanel = $('#notepanel');
 
 function openPanel(mode, paper) {
@@ -1235,7 +1278,8 @@ function openPanel(mode, paper) {
   // panel simply appearing.
   requestAnimationFrame(() => {
     notePanel.classList.add('open');
-    if (mode === 'note') $('#notetext').focus();
+    state.noteTrap = trapFocus(notePanel,
+      mode === 'note' ? $('#notetext') : $('#citetext'));
   });
 }
 
@@ -1247,6 +1291,8 @@ function editNote(paper) {
 function closeNote() {
   notePanel.classList.remove('open');
   state.notePaper = null;
+  releaseFocus(state.noteTrap);
+  state.noteTrap = null;
   // Wait for the slide out before removing it from the layout.
   setTimeout(() => {
     if (!notePanel.classList.contains('open')) notePanel.hidden = true;
@@ -1276,7 +1322,10 @@ $('#notesave').addEventListener('click', async () => {
 });
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !notePanel.hidden) closeNote();
+  if (e.key !== 'Escape') return;
+  // Close the topmost overlay first: the note drawer sits above the sheet.
+  if (!notePanel.hidden) closeNote();
+  else if (!$('#sheet').hidden) closeSheet();
 });
 
 async function copyToClipboard(text) {
@@ -1684,7 +1733,17 @@ async function openSheet(opts) {
     : `File ${opts.keys.length} paper${opts.keys.length === 1 ? '' : 's'}`;
   $('#sheetok').textContent = opts.mode === 'base' ? 'Use this folder' : 'File here';
   $('#sheet').hidden = false;
+  // Focus lands on Cancel -- a safe, non-destructive control -- rather than on
+  // Confirm, where a stray Enter would file to the wrong folder.
+  state.sheetTrap = trapFocus($('#sheet'), $('#sheetcancel'));
   await browse(state.sheet.parent);
+}
+
+function closeSheet() {
+  $('#sheet').hidden = true;
+  state.sheet = null;
+  releaseFocus(state.sheetTrap);
+  state.sheetTrap = null;
 }
 
 async function browse(parent) {
@@ -1724,7 +1783,7 @@ async function browse(parent) {
   }
 }
 
-$('#sheetcancel').addEventListener('click', () => { $('#sheet').hidden = true; state.sheet = null; });
+$('#sheetcancel').addEventListener('click', closeSheet);
 
 $('#sheetnew').addEventListener('click', async () => {
   const name = prompt('New folder name');
@@ -1754,8 +1813,7 @@ $('#sheetok').addEventListener('click', async () => {
       });
       state.selected.clear();
     }
-    $('#sheet').hidden = true;
-    state.sheet = null;
+    closeSheet();
     loadFiling();
   } catch (e) { showError(e.message); }
 });
@@ -1914,8 +1972,10 @@ async function resumeRefreshIfRunning() {
 
 function showNotice(msg) {
   const el = $('#notice');
-  el.textContent = msg;
+  // Unhide first, then write: the live region speaks only a change made
+  // while it is displayed.
   el.hidden = false;
+  el.textContent = msg;
   clearTimeout(showNotice.t);
   showNotice.t = setTimeout(() => { el.hidden = true; }, 3500);
 }
