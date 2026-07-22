@@ -832,17 +832,21 @@ function showError(msg) {
 }
 
 function showCounts(c) {
-  // Of the papers actually triaged -- decided one way or the other -- what
-  // share were kept. Pending papers aren't triaged yet, so they're excluded;
-  // with nothing decided there's no rate to show.
+  // Four disjoint facts, not five overlapping ones: what's waiting, how much
+  // has been decided, how selective that was, and how much is archived. The
+  // old line double-counted -- "accepted" silently included the filed and
+  // in-Drive papers -- and pinned the rate to the wrong noun.
+  const pending = c.pending || 0;
   const triaged = (c.accepted || 0) + (c.rejected || 0);
-  const rate = triaged ? ` [${Math.round(100 * (c.accepted || 0) / triaged)}%]` : '';
-  $('#counts').textContent =
-    `${c.pending || 0} pending · ${c.accepted || 0} accepted · ` +
-    `${c.rejected || 0} rejected · ${c.filed || 0} filed · ` +
-    `${c.processed || 0} in Drive${rate}`;
-  $('#badge-triage').textContent = c.pending || 0;
-  $('#badge-processed').textContent = c.processed || 0;
+  const archived = c.processed || 0;
+  const parts = [`${pending} pending`, `${triaged} triaged`];
+  // "kept" is the share of triaged papers that were accepted -- undefined
+  // until something has been decided, so it appears only then.
+  if (triaged) parts.push(`${Math.round(100 * (c.accepted || 0) / triaged)}% kept`);
+  parts.push(`${archived} archived`);
+  $('#counts').textContent = parts.join(' · ');
+  $('#badge-triage').textContent = pending;
+  $('#badge-processed').textContent = archived;
 }
 
 // ---------- triage ----------

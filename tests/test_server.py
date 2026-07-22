@@ -1669,12 +1669,15 @@ def test_page_has_the_detach_control(client):
     assert "method: 'DELETE'" in body
 
 
-def test_counts_bar_shows_acceptance_rate(client):
-    # The accept rate rides on the existing counts payload -- accepted over
-    # everything triaged -- and renders in square brackets after "in Drive".
+def test_counts_bar_summarises_the_pipeline(client):
+    # Four disjoint facts -- pending, triaged, kept-rate, archived -- with the
+    # rate labelled so it can't be misread as "share in Drive", and no
+    # double-counting of accepted/filed/in-Drive.
     body = client.get("/").text
     assert "const triaged = (c.accepted || 0) + (c.rejected || 0);" in body
-    assert "in Drive${rate}" in body
+    assert "`${triaged} triaged`" in body
+    assert "% kept`" in body
+    assert "`${archived} archived`" in body
 
 
 def test_status_banners_are_live_regions(client):
