@@ -390,8 +390,10 @@
     background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.22);
   }
   #rdnotepane {
-    flex: 0 0 20rem; display: flex; flex-direction: column; gap: .5rem;
-    padding: .8rem; border-left: 1px solid var(--line); background: var(--sheet);
+    /* Half the previous width: the page is what you are here to read, and the
+       note is usually a sentence. */
+    flex: 0 0 10rem; display: flex; flex-direction: column; gap: .5rem;
+    padding: .6rem; border-left: 1px solid var(--line); background: var(--sheet);
   }
   #rdnotepane[hidden] { display: none; }
   #rdnote {
