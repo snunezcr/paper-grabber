@@ -17,7 +17,7 @@ from html import escape as html_escape
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi import Request
 from fastapi.responses import (
@@ -98,6 +98,7 @@ def create_app(
     refresh_days: int = 7,
     staging_path: Path | None = None,
     upload_runner: UploadRunner | None = None,
+    pdf_fetcher=None,
 ) -> FastAPI:
     app = FastAPI(title="Research Stream", docs_url=None, redoc_url=None)
     auth = oauth or WebOAuth()
@@ -271,6 +272,8 @@ def create_app(
         rather than linked directly because the browser holds no Google
         credentials -- the server is the one that is signed in.
         """
+        from .uploader import pdf_candidates_for
+
         with open_ledger() as led:
             paper = led.get(key)
             if paper is None:
@@ -278,6 +281,7 @@ def create_app(
             drive_file_id = paper.drive_file_id
             staged_name = paper.staged_name
             title = paper.title
+            candidates = pdf_candidates_for(paper)
 
         filename = f"{title[:80]}.pdf".replace('"', "")
         headers = {"Content-Disposition": f'inline; filename="{filename}"'}
@@ -290,9 +294,30 @@ def create_app(
                 return FileResponse(path, media_type="application/pdf", headers=headers)
 
         if not drive_file_id:
-            raise HTTPException(
-                status_code=404,
-                detail="no PDF for this paper yet -- it has not been fetched",
+            # Nothing held locally or in Drive, so fetch it from its
+            # open-access location for reading. Deliberately not staged: this
+            # is a read, and staging would put the paper in the upload queue
+            # without anyone asking for that.
+            if not candidates:
+                raise HTTPException(
+                    status_code=404,
+                    detail="no open-access PDF is known for this paper",
+                )
+
+            if pdf_fetcher is not None:
+                fetched = pdf_fetcher(candidates)
+            else:
+                from .fetch import download_first_available, make_client
+
+                with make_client() as http:
+                    fetched = download_first_available(candidates, client=http)
+            if not fetched.ok:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"could not fetch the PDF: {fetched.reason}",
+                )
+            return Response(
+                content=fetched.content, media_type="application/pdf", headers=headers
             )
 
         try:

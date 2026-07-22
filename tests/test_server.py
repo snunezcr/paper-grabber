@@ -1285,13 +1285,69 @@ def test_pdf_is_pulled_from_drive_once_uploaded(seeded, tmp_path):
     assert r.content == PDF_BYTES
 
 
-def test_paper_with_no_file_yet_is_404(seeded, tmp_path):
+def test_paper_with_no_known_pdf_is_404(seeded, tmp_path):
+    # No local copy, nothing in Drive, and no open-access location to try.
     with Ledger(seeded) as led:
-        key = led.pending()[0].key
+        led.record(AlertPaper(title="Closed Access Only", year=2026,
+                              url="https://dl.acm.org/doi/abs/10.1/x"))
+        key = [p.key for p in led.pending() if "Closed" in p.title][0]
+
     c = TestClient(create_app(seeded, staging_path=tmp_path / "s"))
     r = c.get(f"/api/papers/{key}/pdf")
     assert r.status_code == 404
-    assert "not been fetched" in r.json()["detail"]
+    assert "no open-access PDF" in r.json()["detail"]
+
+
+def test_unfetched_paper_is_downloaded_on_demand(seeded, tmp_path):
+    # The reader must work on an accepted-but-not-yet-fetched paper: that is
+    # exactly the state papers sit in when you want to read them.
+    asked = []
+
+    class Fetched:
+        ok, content, reason, size = True, PDF_BYTES, None, len(PDF_BYTES)
+
+    def fake_fetch(candidates):
+        asked.append(list(candidates))
+        return Fetched()
+
+    with Ledger(seeded) as led:
+        key = led.pending()[0].key          # has an arXiv url, never staged
+
+    c = TestClient(create_app(seeded, staging_path=tmp_path / "s",
+                              pdf_fetcher=fake_fetch))
+    r = c.get(f"/api/papers/{key}/pdf")
+    assert r.status_code == 200
+    assert r.content == PDF_BYTES
+    assert asked and asked[0]              # it had somewhere to fetch from
+
+
+def test_a_failed_on_demand_fetch_is_502(seeded, tmp_path):
+    class Failed:
+        ok, content, reason, size = False, None, "HTTP 403", 0
+
+    with Ledger(seeded) as led:
+        key = led.pending()[0].key
+
+    c = TestClient(create_app(seeded, staging_path=tmp_path / "s",
+                              pdf_fetcher=lambda c_: Failed()))
+    r = c.get(f"/api/papers/{key}/pdf")
+    assert r.status_code == 502
+    assert "403" in r.json()["detail"]
+
+
+def test_reading_does_not_stage_the_paper(seeded, tmp_path):
+    # Staging would put it in the upload queue without anyone asking.
+    class Fetched:
+        ok, content, reason, size = True, PDF_BYTES, None, len(PDF_BYTES)
+
+    with Ledger(seeded) as led:
+        key = led.pending()[0].key
+
+    c = TestClient(create_app(seeded, staging_path=tmp_path / "s",
+                              pdf_fetcher=lambda c_: Fetched()))
+    c.get(f"/api/papers/{key}/pdf")
+    with Ledger(seeded) as led:
+        assert led.get(key).staged_name is None
 
 
 def test_pdf_for_an_unknown_paper_is_404(client):
@@ -1377,3 +1433,27 @@ def test_pdf_link_stays_external_before_the_file_exists(client):
 def test_every_card_wires_the_pdf_link(client):
     # cardBody is shared by four renderers; a missed one would be a dead link.
     assert client.get("/").text.count("wirePdfLink(el, p);") == 4
+
+
+def test_read_is_offered_whenever_a_paper_can_be_opened(client):
+    # Requiring a downloaded copy hid the reader on accepted-but-unfetched
+    # papers -- precisely the ones a user wants to read.
+    body = client.get("/").text
+    assert "return Boolean(p.can_read);" in body
+
+
+def test_can_read_covers_an_unfetched_open_access_paper(client):
+    p = next(x for x in client.get("/api/pending").json()["papers"]
+             if "FPGA" in x["title"])
+    assert p["staged"] is False and p["uploaded"] is False
+    assert p["can_read"] is True          # an arXiv link is enough
+
+
+def test_can_read_is_false_without_any_pdf_location(seeded):
+    with Ledger(seeded) as led:
+        led.record(AlertPaper(title="Paywalled", year=2026,
+                              url="https://dl.acm.org/doi/abs/10.1/x"))
+    c = TestClient(create_app(seeded))
+    p = next(x for x in c.get("/api/pending").json()["papers"]
+             if x["title"] == "Paywalled")
+    assert p["can_read"] is False

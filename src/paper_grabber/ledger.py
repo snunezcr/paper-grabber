@@ -88,6 +88,12 @@ class LedgerPaper:
     note: str | None = None
 
 
+def _scholar_pdf_url(url: str | None) -> bool:
+    """Whether Scholar's own link is plainly a PDF we could fetch."""
+    lowered = (url or "").lower()
+    return lowered.endswith(".pdf") or "/pdf/" in lowered or "arxiv.org/abs/" in lowered
+
+
 def paper_view(p: LedgerPaper) -> dict[str, Any]:
     """Flatten a ledger row into the fields every consumer wants.
 
@@ -129,6 +135,15 @@ def paper_view(p: LedgerPaper) -> dict[str, Any]:
         "note": p.note,
         "staged": p.staged_name is not None,
         "uploaded": p.drive_file_id is not None,
+        # Whether the reader can show it: a copy we hold, or somewhere to
+        # fetch one from. has_pdf is not enough -- Scholar's [PDF] badge often
+        # points at a landing page.
+        "can_read": bool(
+            p.drive_file_id
+            or p.staged_name
+            or (e.get("pdf_candidates") or e.get("pdf_url"))
+            or _scholar_pdf_url(d.get("url"))
+        ),
         "uploaded_at": p.uploaded_at,
         # Opens the PDF in Drive, which is where reading and annotation happen.
         "drive_url": (

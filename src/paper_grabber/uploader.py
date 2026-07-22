@@ -133,7 +133,7 @@ def make_upload_job(
                     # Stage it if the file is not on disk yet.
                     name = entry.staged_name
                     if not name or not staging.path_for(name).exists():
-                        candidates = _candidates(entry, AlertPaper, direct_pdf_url)
+                        candidates = pdf_candidates_for(entry)
                         if not candidates:
                             result.failed += 1
                             result.outcomes.append(
@@ -211,17 +211,24 @@ def make_upload_job(
     return job
 
 
-def _candidates(entry, alert_cls, direct) -> list[str]:
-    """PDF URLs for a ledger row: enrichment first, Scholar's own link last."""
+def pdf_candidates_for(entry) -> list[str]:
+    """PDF URLs for a ledger row: enrichment first, Scholar's own link last.
+
+    Shared with the reader, which needs the same answer to the same question --
+    where can this paper's PDF be fetched from.
+    """
+    from .enrich import direct_pdf_url
+    from .models import AlertPaper
+
     enrichment = entry.payload.get("enrichment") or {}
     urls = list(enrichment.get("pdf_candidates") or [])
     if not urls and enrichment.get("pdf_url"):
         urls.append(enrichment["pdf_url"])
 
-    paper = alert_cls(
-        **{k: v for k, v in entry.payload.items() if k in alert_cls.__dataclass_fields__}
+    paper = AlertPaper(
+        **{k: v for k, v in entry.payload.items() if k in AlertPaper.__dataclass_fields__}
     )
-    scholar = direct(paper)
+    scholar = direct_pdf_url(paper)
     if scholar and scholar not in urls:
         urls.append(scholar)
     return urls

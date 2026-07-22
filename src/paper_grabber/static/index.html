@@ -843,10 +843,12 @@ function link(href, label) {
     : '';
 }
 
-// Read is offered only when there is a file to open: staged locally, or in
-// Drive. Anything else would open the reader onto a 404.
+// Read is offered whenever the paper can be opened at all -- a copy we hold,
+// or an open-access location the server can fetch on demand. Requiring a
+// downloaded copy first hid the reader on exactly the papers most likely to
+// be read: accepted, but not yet fetched.
 function hasPdfFile(p) {
-  return Boolean(p.uploaded || p.staged);
+  return Boolean(p.can_read);
 }
 
 function cardLinks(p) {
