@@ -226,11 +226,13 @@
     display: flex; flex-wrap: wrap; align-items: center; gap: .1rem .55rem;
     margin: .45rem 0 .1rem; font-size: .88rem;
   }
-  .links a {
+  .links a, .links button.pdflink {
     color: var(--accent); text-decoration: none; font-weight: 600;
     min-height: 40px; display: inline-flex; align-items: center;
+    background: none; border: 0; padding: 0; cursor: pointer;
+    font-size: inherit; font-family: inherit;
   }
-  .links a:hover { text-decoration: underline; }
+  .links a:hover, .links button.pdflink:hover { text-decoration: underline; }
   .links .dot { color: var(--line); }
 
   .tags { display: flex; flex-wrap: wrap; gap: .4rem; margin: .6rem 0 .9rem; }
@@ -850,12 +852,25 @@ function hasPdfFile(p) {
 function cardLinks(p) {
   // Distinct destinations rather than one "Open" whose target depends on
   // what enrichment happened to find.
+  //
+  // Once we hold the file, "PDF" opens it in the reader rather than sending
+  // the browser to the publisher: clicking a link labelled PDF should show
+  // the PDF, and a new tab to arxiv.org is not what it means here. Before the
+  // file is fetched it stays an external link, which is what makes it useful
+  // during triage.
+  const pdf = hasPdfFile(p)
+    ? '<button type="button" class="pdflink">PDF</button>'
+    : link(p.pdf_url, 'PDF');
   const parts = [
-    link(p.pdf_url, 'PDF'),
+    pdf,
     link(p.doi_url, 'DOI'),
     link(p.source_url, esc(p.source_label || 'Publisher')),
   ].filter(Boolean);
   return parts.length ? `<div class="links">${parts.join('<span class="dot">·</span>')}</div>` : '';
+}
+
+function wirePdfLink(el, p) {
+  el.querySelector('.pdflink')?.addEventListener('click', () => openReader(p));
 }
 
 function cardBody(p) {
@@ -894,6 +909,7 @@ function triageCard(p) {
       ${iconBtn('no', 'x', 'Skip')}
     </div>`;
   wireAbstract(el);
+  wirePdfLink(el, p);
   el.querySelector('.yes').addEventListener('click', () => decide(el, p, 'accepted'));
   el.querySelector('.no').addEventListener('click', () => decide(el, p, 'rejected'));
   return el;
@@ -1121,6 +1137,7 @@ function filingCard(p, {selectable}) {
     <div style="flex:1">${cardBody(p)}</div>`;
   el.appendChild(inner);
   wireAbstract(el);
+  wirePdfLink(el, p);
 
   if (selectable) {
     const box = el.querySelector('input');
@@ -1396,6 +1413,7 @@ function processedCard(p) {
       ${iconBtn('cite', 'quote', 'Copy BibTeX')}
     </div>`;
   wireAbstract(el);
+  wirePdfLink(el, p);
   el.querySelector('.verify').addEventListener('click', () => verifyOne(p, el));
   el.querySelector('.read')?.addEventListener('click', () => openReader(p));
   el.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
@@ -1437,6 +1455,7 @@ function rejectedCard(p) {
       ${iconBtn('recover', 'rotate-ccw', 'Recover to Filing')}
     </div>`;
   wireAbstract(el);
+  wirePdfLink(el, p);
   el.querySelector('.recover').addEventListener('click', () => recoverOne(p, el));
   return el;
 }

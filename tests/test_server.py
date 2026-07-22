@@ -1356,3 +1356,24 @@ def test_reader_sits_below_the_header_not_over_it(client):
 
 def test_leaving_a_tab_closes_the_reader(client):
     assert "if (state.readerPaper) closeReader();" in client.get("/").text
+
+
+def test_pdf_link_opens_the_reader_once_the_file_is_held(client):
+    # Clicking a link labelled PDF should show the PDF, not open a new tab at
+    # the publisher -- that was the same word meaning two things.
+    body = client.get("/").text
+    links = body.split("function cardLinks")[1].split("function wirePdfLink")[0]
+    assert "hasPdfFile(p)" in links
+    assert 'class="pdflink"' in links
+    assert "wirePdfLink" in body
+
+
+def test_pdf_link_stays_external_before_the_file_exists(client):
+    # During triage there is no local copy, and the source link is the point.
+    links = client.get("/").text.split("function cardLinks")[1].split("function wirePdfLink")[0]
+    assert "link(p.pdf_url, 'PDF')" in links
+
+
+def test_every_card_wires_the_pdf_link(client):
+    # cardBody is shared by four renderers; a missed one would be a dead link.
+    assert client.get("/").text.count("wirePdfLink(el, p);") == 4
