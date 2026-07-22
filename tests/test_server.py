@@ -1707,3 +1707,29 @@ def test_overlays_trap_and_restore_focus(client):
     assert "releaseFocus(state.sheetTrap)" in body
     # Escape closes the sheet as well as the note drawer.
     assert "else if (!$('#sheet').hidden) closeSheet();" in body
+
+
+# --- per-alert skip rate ------------------------------------------------------
+
+
+def test_pending_payload_carries_alert_stats(seeded):
+    with Ledger(seeded) as led:
+        led.record(AlertPaper(title="Noisy One", alert_query="cs.AI"))
+        led.record(AlertPaper(title="Noisy Two", alert_query="cs.AI"))
+        led.decide("Noisy One", Decision.REJECTED)
+        led.decide("Noisy Two", Decision.REJECTED)
+    c = TestClient(create_app(seeded))
+    stats = c.get("/api/pending").json()["alert_stats"]
+    assert stats["cs.AI"] == {"accepted": 0, "rejected": 2, "pending": 0}
+
+
+def test_sidebar_renders_skip_rate_and_sort_toggle(client):
+    body = client.get("/").text
+    # The rate, its noise threshold, and the stash off the pending payload.
+    assert "function alertRate" in body
+    assert "const MIN_TRIAGED_FOR_RATE = 5;" in body
+    assert "% skipped · ${triaged} triaged" in body
+    assert "state.alertStats = data.alert_stats || {};" in body
+    # The sort toggle between pending volume and skip rate.
+    assert 'id="alertsort"' in body
+    assert "state.alertSort === 'skip' ? 'Sort: most skipped'" in body

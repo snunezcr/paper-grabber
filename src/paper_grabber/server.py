@@ -188,6 +188,9 @@ def create_app(
             return {
                 "papers": [paper_view(p) for p in led.pending()],
                 "counts": led.counts(),
+                # Rides along so the sidebar's alert filter can show each saved
+                # search's lifetime skip rate without a second round-trip.
+                "alert_stats": led.alert_stats(),
             }
 
     @app.post("/api/papers/{key}/decision")

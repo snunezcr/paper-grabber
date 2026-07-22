@@ -31,6 +31,11 @@ class Decision(str, Enum):
     REJECTED = "rejected"
 
 
+# Papers with no saved-search attribution are bucketed under this label, which
+# must match the frontend's alertOf() so the two agree on alert identity.
+NO_ALERT = "(no alert)"
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
     message_id   TEXT PRIMARY KEY,
@@ -466,6 +471,28 @@ class Ledger:
             "SELECT COUNT(*) FROM papers WHERE drive_file_id IS NOT NULL"
         ).fetchone()[0]
         return counts
+
+    def alert_stats(self) -> dict[str, dict[str, int]]:
+        """Per-alert lifetime tallies by decision.
+
+        Keyed by the same alert identity paper_view exposes -- the payload's
+        alert_query, with a missing or empty one bucketed as NO_ALERT. Lets the
+        sidebar show how selective each saved search has been, so a noisy one
+        can be pruned. A paper keeps its decision after being filed or
+        uploaded, so an accepted paper counts as accepted for good.
+        """
+        rows = self._db.execute(
+            "SELECT json_extract(payload, '$.alert_query') AS alert,"
+            " decision, COUNT(*) FROM papers GROUP BY alert, decision"
+        ).fetchall()
+        stats: dict[str, dict[str, int]] = {}
+        for alert, decision, n in rows:
+            bucket = stats.setdefault(
+                alert or NO_ALERT, {"accepted": 0, "rejected": 0, "pending": 0}
+            )
+            if decision in bucket:
+                bucket[decision] = n
+        return stats
 
     @staticmethod
     def _row(r) -> LedgerPaper:

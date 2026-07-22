@@ -486,3 +486,39 @@ def test_every_query_returns_the_same_columns(ledger):
 
     ledger.decide("Everywhere", Decision.REJECTED)
     assert ledger.rejected()[0].note == "visible everywhere"
+
+
+# --- alert stats --------------------------------------------------------------
+
+
+def test_alert_stats_group_by_alert_and_decision(ledger):
+    for t in ("A", "B", "C"):
+        ledger.record(paper(title=t, alert_query="cs.AI"))
+    ledger.record(paper(title="D", alert_query="stats.ML"))
+    ledger.decide("A", Decision.ACCEPTED)
+    ledger.decide("B", Decision.REJECTED)
+    ledger.decide("C", Decision.REJECTED)
+    # D stays pending.
+
+    stats = ledger.alert_stats()
+    assert stats["cs.AI"] == {"accepted": 1, "rejected": 2, "pending": 0}
+    assert stats["stats.ML"] == {"accepted": 0, "rejected": 0, "pending": 1}
+
+
+def test_alert_stats_buckets_missing_query_as_no_alert(ledger):
+    from paper_grabber.ledger import NO_ALERT
+
+    ledger.record(paper(title="X"))            # no alert_query at all
+    ledger.decide("X", Decision.REJECTED)
+    assert ledger.alert_stats()[NO_ALERT] == {"accepted": 0, "rejected": 1, "pending": 0}
+
+
+def test_alert_stats_still_counts_accepted_after_upload(ledger):
+    # A paper keeps decision=accepted through filing and upload, so it must go
+    # on counting toward its alert's kept share -- otherwise a productive alert
+    # would look noisier the more of it you actually used.
+    ledger.record(paper(title="A", alert_query="cs.AI"))
+    key = ledger.pending()[0].key
+    ledger.decide("A", Decision.ACCEPTED)
+    ledger.set_uploaded(key, "DRIVE1")
+    assert ledger.alert_stats()["cs.AI"]["accepted"] == 1

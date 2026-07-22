@@ -180,9 +180,20 @@
     font-size: .87rem; color: var(--ink); text-align: left;
   }
   .opt input { width: 20px; height: 20px; flex: 0 0 auto; }
-  .opt .label { flex: 1; overflow-wrap: anywhere; }
+  .opt .body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .opt .label { overflow-wrap: anywhere; }
+  /* The alert's lifetime skip rate, sitting quietly under its name. */
+  .opt .rate {
+    margin-top: .1rem; font-size: .74rem; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
   .opt .n {
     color: var(--muted); font-variant-numeric: tabular-nums; font-size: .8rem;
+  }
+  .alertsort {
+    width: 100%; min-height: 34px; margin-bottom: .4rem; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: none; color: var(--muted); font-size: .76rem;
   }
 
   @media (max-width: 800px) {
@@ -547,6 +558,7 @@
         <button type="button" data-all>All</button>
         <button type="button" data-none>None</button>
       </div>
+      <button type="button" id="alertsort" class="alertsort"></button>
       <div id="alertoptions"></div>
     </div>
   </details>
@@ -784,7 +796,8 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
 let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               pending: [], alerts: new Set(), knownAlerts: new Set(),
               query: '', suggestions: {}, notePaper: null, panelMode: null,
-              readerPaper: null, authSignedIn: false };
+              readerPaper: null, authSignedIn: false,
+              alertStats: {}, alertSort: 'pending' };
 
 // Capabilities this page expects the server to have.
 const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf'];
@@ -1016,6 +1029,22 @@ function alertCounts() {
   return counts;
 }
 
+// Below this many decisions a percentage is noise -- one reject out of two is
+// not a 90%-skipped alert -- so only the raw triaged count shows until then.
+const MIN_TRIAGED_FOR_RATE = 5;
+
+// One alert's lifetime selectivity: how often its papers were skipped. Returns
+// the display text and a sort key (-1 when there are too few decisions to rank).
+function alertRate(name) {
+  const s = state.alertStats[name];
+  if (!s) return null;
+  const triaged = (s.accepted || 0) + (s.rejected || 0);
+  if (!triaged) return null;
+  if (triaged < MIN_TRIAGED_FOR_RATE) return {text: `${triaged} triaged`, skipRate: -1};
+  const pct = Math.round(100 * (s.rejected || 0) / triaged);
+  return {text: `${pct}% skipped · ${triaged} triaged`, skipRate: (s.rejected || 0) / triaged};
+}
+
 function renderAlertFilter() {
   const counts = alertCounts();
   const group = $('#fg-alerts');
@@ -1037,8 +1066,18 @@ function renderAlertFilter() {
 
   if (group.hidden) return;
 
-  // Busiest first: the noisy query is the one worth isolating.
-  const entries = [...counts].sort((a, b) => b[1] - a[1]);
+  // Busiest first by default; noisiest first when sorting by skip rate, with
+  // alerts too sparse to rank sinking to the bottom by pending volume.
+  const entries = [...counts];
+  if (state.alertSort === 'skip') {
+    entries.sort((a, b) =>
+      ((alertRate(b[0])?.skipRate ?? -1) - (alertRate(a[0])?.skipRate ?? -1))
+      || (b[1] - a[1]));
+  } else {
+    entries.sort((a, b) => b[1] - a[1]);
+  }
+  $('#alertsort').textContent =
+    state.alertSort === 'skip' ? 'Sort: most skipped' : 'Sort: most pending';
 
   $('#alertoptions').replaceChildren(...entries.map(([name, n]) => {
     const row = document.createElement('label');
@@ -1050,13 +1089,23 @@ function renderAlertFilter() {
       box.checked ? state.alerts.add(name) : state.alerts.delete(name);
       renderTriage();
     });
+    const body = document.createElement('span');
+    body.className = 'body';
     const label = document.createElement('span');
     label.className = 'label';
     label.textContent = name;
+    body.appendChild(label);
+    const rate = alertRate(name);
+    if (rate) {
+      const r = document.createElement('span');
+      r.className = 'rate';
+      r.textContent = rate.text;
+      body.appendChild(r);
+    }
     const num = document.createElement('span');
     num.className = 'n';
-    num.textContent = n;
-    row.append(box, label, num);
+    num.textContent = n;   // pending in the current queue: what this box shows
+    row.append(box, body, num);
     return row;
   }));
 
@@ -1144,6 +1193,7 @@ async function loadTriage() {
     const data = await api('/api/pending');
     showCounts(data.counts);
     state.pending = data.papers;
+    state.alertStats = data.alert_stats || {};
     renderTriage();
   } catch (e) { showError(`Could not load papers: ${e.message}`); }
 }
@@ -2187,6 +2237,13 @@ $('#fg-alerts').querySelector('[data-all]').addEventListener('click', () => {
 $('#fg-alerts').querySelector('[data-none]').addEventListener('click', () => {
   state.alerts.clear();
   renderTriage();
+});
+
+// Reordering the sidebar doesn't change which papers show, so re-render the
+// filter alone rather than the whole triage list.
+$('#alertsort').addEventListener('click', () => {
+  state.alertSort = state.alertSort === 'skip' ? 'pending' : 'skip';
+  renderAlertFilter();
 });
 
 const sidebar = $('#sidebar');
