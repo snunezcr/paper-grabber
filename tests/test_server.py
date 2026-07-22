@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from paper_grabber.ledger import Decision, Ledger
 from paper_grabber.models import AlertPaper, normalize_title
 from paper_grabber.server import create_app
+from paper_grabber.staging import StagingArea
 
 
 @pytest.fixture
@@ -212,6 +213,7 @@ class FakeDrive:
         self.missing = set(missing)
         self.trashed = set(trashed)
         self.file_error = file_error
+        self.descriptions = {}
         # {folder_id: (name, parent, [child_ids])}
         self.tree = tree or {
             "BASE": ("Papers", "ROOT", ["QUANTUM", "NETWORKS"]),
@@ -249,6 +251,9 @@ class FakeDrive:
         if file_id in self.trashed:
             return {"present": False, "trashed": True, "name": "gone.pdf"}
         return {"present": True, "trashed": False, "name": "a.pdf"}
+
+    def set_description(self, file_id, description):
+        self.descriptions[file_id] = description
 
     def create_folder(self, name, *, parent_id):
         new_id = f"NEW-{name}"
@@ -1101,16 +1106,39 @@ def test_note_is_trimmed_and_emptied(app_client, seeded):
     assert app_client.get("/api/accepted").json()["unfiled"][0]["note"] is None
 
 
-def test_note_on_an_uploaded_paper_is_refused(app_client, seeded):
-    # Its description in Drive is already written; editing here would leave
-    # the two disagreeing with no way to tell which is current.
+def test_note_on_an_uploaded_paper_syncs_to_drive(app_client, seeded, drive):
+    # Reading happens after filing, which is exactly when there is something
+    # worth writing down -- so the edit is allowed and follows the file.
     accept_all(app_client)
     key = app_client.get("/api/accepted").json()["unfiled"][0]["key"]
     with Ledger(seeded) as led:
         led.set_destination(key, "F1", "Quantum")
         led.set_uploaded(key, "DRIVE1")
-    assert app_client.put(f"/api/papers/{key}/note",
-                          json={"note": "too late"}).status_code == 409
+
+    r = app_client.put(f"/api/papers/{key}/note", json={"note": "worth rereading"})
+    assert r.status_code == 200
+    assert r.json()["synced_to_drive"] is True
+    assert drive.descriptions["DRIVE1"] == "worth rereading"
+
+
+def test_a_drive_failure_does_not_lose_the_note(seeded):
+    # The note is already in the ledger; failing the request would imply
+    # nothing was saved.
+    class BrokenDrive(FakeDrive):
+        def set_description(self, file_id, description):
+            raise RuntimeError("drive down")
+
+    c = TestClient(create_app(seeded, drive_factory=lambda: BrokenDrive()))
+    accept_all(c)
+    key = c.get("/api/accepted").json()["unfiled"][0]["key"]
+    with Ledger(seeded) as led:
+        led.set_uploaded(key, "DRIVE1")
+
+    r = c.put(f"/api/papers/{key}/note", json={"note": "kept anyway"})
+    assert r.status_code == 200
+    assert r.json()["synced_to_drive"] is False
+    with Ledger(seeded) as led:
+        assert led.get(key).note == "kept anyway"
 
 
 def test_note_for_an_unknown_paper_is_404(app_client):
@@ -1214,3 +1242,104 @@ def test_public_bind_is_refused_without_the_flag():
     assert _is_public_bind("192.168.1.5") is False        # home LAN
     assert _is_public_bind("0.0.0.0") is True
     assert _is_public_bind("49.12.200.10") is True        # a Hetzner IP
+
+
+# --- in-app reader ------------------------------------------------------------
+
+
+PDF_BYTES = b"%PDF-1.7\nreader test\n"
+
+
+def test_pdf_is_served_from_staging_when_local(seeded, tmp_path):
+    staging = tmp_path / "staging"
+    area = StagingArea(staging)
+    area.stage("2026 A Paper.pdf", PDF_BYTES)
+    with Ledger(seeded) as led:
+        key = led.pending()[0].key
+        led.decide_by_key(key, Decision.ACCEPTED)
+        led.set_staged(key, "2026 A Paper.pdf")
+
+    c = TestClient(create_app(seeded, staging_path=staging))
+    r = c.get(f"/api/papers/{key}/pdf")
+    assert r.status_code == 200
+    assert r.content == PDF_BYTES
+    assert r.headers["content-type"] == "application/pdf"
+
+
+def test_pdf_is_pulled_from_drive_once_uploaded(seeded, tmp_path):
+    import io
+
+    class DriveWithFile(FakeDrive):
+        def download(self, file_id, **kw):
+            return io.BytesIO(PDF_BYTES)
+
+    with Ledger(seeded) as led:
+        key = led.pending()[0].key
+        led.decide_by_key(key, Decision.ACCEPTED)
+        led.set_uploaded(key, "DRIVE1")
+
+    c = TestClient(create_app(seeded, staging_path=tmp_path / "s",
+                              drive_factory=lambda: DriveWithFile()))
+    r = c.get(f"/api/papers/{key}/pdf")
+    assert r.status_code == 200
+    assert r.content == PDF_BYTES
+
+
+def test_paper_with_no_file_yet_is_404(seeded, tmp_path):
+    with Ledger(seeded) as led:
+        key = led.pending()[0].key
+    c = TestClient(create_app(seeded, staging_path=tmp_path / "s"))
+    r = c.get(f"/api/papers/{key}/pdf")
+    assert r.status_code == 404
+    assert "not been fetched" in r.json()["detail"]
+
+
+def test_pdf_for_an_unknown_paper_is_404(client):
+    assert client.get("/api/papers/nope/pdf").status_code == 404
+
+
+def test_a_drive_download_failure_is_502(seeded, tmp_path):
+    from paper_grabber.drive import DriveError
+
+    class BrokenDrive(FakeDrive):
+        def download(self, file_id, **kw):
+            raise DriveError("drive down")
+
+    with Ledger(seeded) as led:
+        key = led.pending()[0].key
+        led.set_uploaded(key, "DRIVE1")
+
+    c = TestClient(create_app(seeded, staging_path=tmp_path / "s",
+                              drive_factory=lambda: BrokenDrive()))
+    assert c.get(f"/api/papers/{key}/pdf").status_code == 502
+
+
+def test_pdfjs_is_vendored_not_loaded_from_a_cdn(client):
+    # The tailnet has no guarantee of internet access from the browser.
+    r = client.get("/vendor/pdf.mjs")
+    assert r.status_code == 200
+    assert len(r.content) > 100_000
+
+    body = client.get("/").text
+    assert "'/vendor/pdf.mjs'" in body
+    assert "cdnjs" not in body and "unpkg" not in body
+
+
+def test_pdfjs_worker_is_vendored(client):
+    assert client.get("/vendor/pdf.worker.mjs").status_code == 200
+
+
+def test_pdfjs_is_loaded_lazily(client):
+    # 2.7 MB should not be fetched for a session that only triages.
+    body = client.get("/").text
+    assert "await import('/vendor/pdf.mjs')" in body
+
+
+def test_reader_renders_pages_lazily(client):
+    body = client.get("/").text
+    assert "IntersectionObserver" in body
+    assert "rdpage" in body
+
+
+def test_reader_is_an_advertised_capability(client):
+    assert "reader" in client.get("/api/version").json()["capabilities"]

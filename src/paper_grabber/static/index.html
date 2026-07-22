@@ -346,6 +346,65 @@
 
   /* A right-hand drawer rather than a modal: the card being annotated stays
      visible while the note is written. */
+  /* Reader: PDF on the left, notes on the right. Full screen because a
+     paper deserves the whole tablet, not a column beside the queue. */
+  #reader {
+    position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column;
+    background: var(--bg);
+  }
+  #reader[hidden] { display: none; }
+  .rdtop {
+    display: flex; align-items: center; gap: .5rem; flex: 0 0 auto;
+    padding: calc(.5rem + env(safe-area-inset-top)) .75rem .5rem;
+    border-bottom: 1px solid var(--line); background: var(--card);
+  }
+  .rdtitle {
+    flex: 1; min-width: 0; font-size: .95rem; font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .rdpages {
+    flex: 0 0 auto; font-size: .82rem; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .rdtop button {
+    flex: 0 0 auto; display: inline-flex; align-items: center;
+    justify-content: center; width: 40px; height: 40px; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--card); color: var(--ink);
+  }
+  .rdbody { flex: 1; display: flex; min-height: 0; }
+  #rddoc {
+    flex: 1; min-width: 0; overflow: auto; padding: 1rem .5rem 2rem;
+    background: var(--bg); text-align: center;
+    -webkit-overflow-scrolling: touch;
+  }
+  #rddoc canvas, #rddoc .rdpage {
+    display: block; margin: 0 auto 1rem; max-width: 100%;
+    background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.22);
+  }
+  #rdnotepane {
+    flex: 0 0 20rem; display: flex; flex-direction: column; gap: .5rem;
+    padding: .8rem; border-left: 1px solid var(--line); background: var(--sheet);
+  }
+  #rdnotepane[hidden] { display: none; }
+  #rdnote {
+    flex: 1; min-height: 6rem; width: 100%; padding: .6rem; resize: none;
+    font: 15px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 8px;
+  }
+  #rdnotesave {
+    min-height: 44px; cursor: pointer; font-weight: 600; border-radius: 10px;
+    border: 1px solid var(--accent); background: var(--accent); color: #fff;
+  }
+  /* Portrait: notes would leave no room for the page, so they toggle over it. */
+  @media (max-width: 900px) {
+    #rdnotepane {
+      position: absolute; right: 0; bottom: 0; top: 0; z-index: 2;
+      flex-basis: min(20rem, 85vw); box-shadow: -6px 0 24px rgba(0,0,0,.25);
+    }
+    .rdbody { position: relative; }
+  }
+
   #notepanel {
     position: fixed; top: 0; right: 0; bottom: 0; z-index: 26;
     width: min(24rem, 92vw); display: flex; flex-direction: column;
@@ -530,6 +589,26 @@
 
 <button id="undo" hidden>Undo</button>
 
+<div id="reader" hidden>
+  <div class="rdtop">
+    <span class="rdtitle" id="rdtitle"></span>
+    <span class="rdpages" id="rdpages"></span>
+    <button id="rdout" aria-label="Zoom out" data-tip="Zoom out"></button>
+    <button id="rdin" aria-label="Zoom in" data-tip="Zoom in"></button>
+    <button id="rdnotes" aria-label="Show notes" data-tip="Show or hide notes"></button>
+    <button id="rdclose" aria-label="Close reader" data-tip="Close"></button>
+  </div>
+  <div class="rdbody">
+    <div id="rddoc"><div id="rdstatus" class="note">Loading…</div></div>
+    <aside id="rdnotepane">
+      <label class="shlabel" for="rdnote">Note</label>
+      <textarea id="rdnote" placeholder="Why this paper matters, what to read first…"></textarea>
+      <p class="notehint" id="rdnotehint">Saved to the file's description in Drive.</p>
+      <button id="rdnotesave">Save</button>
+    </aside>
+  </div>
+</div>
+
 <aside id="notepanel" aria-label="Side panel" hidden>
   <div class="nphead">
     <span class="nplabel" id="nplabel">Note</span>
@@ -593,6 +672,9 @@ const ICONS = {
   ban: '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
   'check-square':
     '<path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+  'book-open': '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
+  'zoom-in': '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6"/><path d="M8 11h6"/>',
+  'zoom-out': '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/><path d="M8 11h6"/>',
   'chevron-left': '<path d="m15 18-6-6 6-6"/>',
   'chevron-right': '<path d="m9 18 6-6-6-6"/>',
 };
@@ -621,6 +703,10 @@ function paintStaticIcons() {
     '#sidebarexpand': 'chevron-right',
   };
   map['#notecancel'] = 'x';
+  map['#rdclose'] = 'x';
+  map['#rdin'] = 'zoom-in';
+  map['#rdout'] = 'zoom-out';
+  map['#rdnotes'] = 'pencil';
   for (const [sel, name] of Object.entries(map)) {
     const el = document.querySelector(sel);
     if (el) el.innerHTML = icon(name);
@@ -687,10 +773,11 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
 
 let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               pending: [], alerts: new Set(), knownAlerts: new Set(),
-              query: '', suggestions: {}, notePaper: null, panelMode: null };
+              query: '', suggestions: {}, notePaper: null, panelMode: null,
+              readerPaper: null };
 
 // Capabilities this page expects the server to have.
-const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes'];
+const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader'];
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -747,6 +834,12 @@ function link(href, label) {
   return href
     ? `<a href="${esc(href)}" target="_blank" rel="noopener">${label}</a>`
     : '';
+}
+
+// Read is offered only when there is a file to open: staged locally, or in
+// Drive. Anything else would open the reader onto a 404.
+function hasPdfFile(p) {
+  return Boolean(p.uploaded || p.staged);
 }
 
 function cardLinks(p) {
@@ -1040,11 +1133,13 @@ function filingCard(p, {selectable}) {
     const hint = state.suggestions?.[p.key];
     actions.innerHTML = `
       ${hint ? `<button class="suggest" data-tip="${esc(hint.reason)}">${icon('folder-input')}<span>${esc(hint.folder_name)}</span></button>` : ''}
+      ${hasPdfFile(p) ? iconBtn('read', 'book-open', 'Read with notes') : ''}
       <span class="cardstatus" hidden></span>
       ${iconBtn('note' + (p.note ? ' has-note' : ''), 'pencil',
                 p.note ? 'Edit note' : 'Add a note')}
       ${iconBtn('cite', 'quote', 'Copy BibTeX')}`;
     actions.querySelector('.note').addEventListener('click', () => editNote(p));
+    actions.querySelector('.read')?.addEventListener('click', () => openReader(p));
     if (hint) {
       actions.querySelector('.suggest')
         .addEventListener('click', () => acceptSuggestion(p, hint, el));
@@ -1064,6 +1159,7 @@ function filingCard(p, {selectable}) {
       actions.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
     } else {
       actions.innerHTML = `
+        ${hasPdfFile(p) ? iconBtn('read', 'book-open', 'Read with notes') : ''}
         ${iconBtn('up', 'cloud-upload', 'Upload to Drive')}
         ${iconBtn('unfile', 'corner-up-left', 'Not yet — clear the destination')}
         <span class="cardstatus" hidden></span>
@@ -1071,6 +1167,7 @@ function filingCard(p, {selectable}) {
                   p.note ? 'Edit note' : 'Add a note')}
         ${iconBtn('cite', 'quote', 'Copy BibTeX')}`;
       actions.querySelector('.note').addEventListener('click', () => editNote(p));
+      actions.querySelector('.read')?.addEventListener('click', () => openReader(p));
       actions.querySelector('.up').addEventListener('click', () => uploadOne(p, el));
       actions.querySelector('.unfile').addEventListener('click', () => unfile(p));
       actions.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
@@ -1287,6 +1384,7 @@ function processedCard(p) {
         ? `<a class="open iconbtn" href="${esc(p.drive_url)}" target="_blank"
              rel="noopener" aria-label="Open in Drive" data-tip="Open in Drive">${icon('external-link')}</a>`
         : ''}
+      ${iconBtn('read', 'book-open', 'Read with notes')}
       ${iconBtn('verify', 'refresh-cw', 'Check it is still in Drive')}
       <span class="done">${p.dest_folder_name ? '→ ' + esc(p.dest_folder_name) : 'In Drive'}</span>
       <span class="cardstatus" hidden></span>
@@ -1294,6 +1392,7 @@ function processedCard(p) {
     </div>`;
   wireAbstract(el);
   el.querySelector('.verify').addEventListener('click', () => verifyOne(p, el));
+  el.querySelector('.read')?.addEventListener('click', () => openReader(p));
   el.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
   return el;
 }
@@ -1726,6 +1825,159 @@ searchInput.addEventListener('keydown', e => {
     e.preventDefault();
     $('#qclear').click();
   }
+});
+
+
+// ---------- reader ----------
+//
+// PDF.js is loaded on first use rather than at startup: it is 2.7 MB, and
+// most sessions are triage, which never opens a paper.
+
+let pdfjs = null;
+let readerDoc = null;         // the loaded PDFDocumentProxy
+let readerScale = null;       // null means fit-width
+let readerObserver = null;
+
+async function loadPdfjs() {
+  if (pdfjs) return pdfjs;
+  pdfjs = await import('/vendor/pdf.mjs');
+  pdfjs.GlobalWorkerOptions.workerSrc = '/vendor/pdf.worker.mjs';
+  return pdfjs;
+}
+
+async function openReader(paper) {
+  state.readerPaper = paper;
+  $('#rdtitle').textContent = paper.title;
+  $('#rdpages').textContent = '';
+  $('#rdnote').value = paper.note || '';
+  $('#rdnotehint').textContent = paper.uploaded
+    ? "Saved here and to the file's description in Drive."
+    : "Written to the file's description in Drive when it is uploaded.";
+  $('#rddoc').replaceChildren(Object.assign(document.createElement('div'),
+    {className: 'note', textContent: 'Loading…'}));
+  $('#reader').hidden = false;
+  readerScale = null;
+
+  try {
+    const lib = await loadPdfjs();
+    const url = `/api/papers/${encodeURIComponent(paper.key)}/pdf`;
+    readerDoc = await lib.getDocument({url, withCredentials: true}).promise;
+    $('#rdpages').textContent = `${readerDoc.numPages} pages`;
+    await layoutPages();
+  } catch (e) {
+    $('#rddoc').replaceChildren(Object.assign(document.createElement('div'),
+      {className: 'note', textContent: `Could not open the PDF: ${e.message}`}));
+  }
+}
+
+// Pages are laid out as empty placeholders at the right aspect ratio and
+// rendered only as they approach the viewport. Rendering a 300-page thesis
+// up front would lock the tablet for several seconds.
+async function layoutPages() {
+  const doc = readerDoc;
+  const wrap = $('#rddoc');
+  wrap.replaceChildren();
+  if (readerObserver) readerObserver.disconnect();
+
+  const first = await doc.getPage(1);
+  const natural = first.getViewport({scale: 1});
+  const available = wrap.clientWidth - 24;
+  const scale = readerScale || (available / natural.width);
+
+  const placeholders = [];
+  for (let n = 1; n <= doc.numPages; n++) {
+    const div = document.createElement('div');
+    div.className = 'rdpage';
+    div.dataset.page = n;
+    div.style.width = `${Math.floor(natural.width * scale)}px`;
+    div.style.height = `${Math.floor(natural.height * scale)}px`;
+    wrap.appendChild(div);
+    placeholders.push(div);
+  }
+
+  readerObserver = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) {
+        renderPage(entry.target, scale);
+        readerObserver.unobserve(entry.target);
+      }
+    }
+  }, {root: wrap, rootMargin: '300px'});
+  placeholders.forEach(el => readerObserver.observe(el));
+}
+
+async function renderPage(placeholder, scale) {
+  const n = Number(placeholder.dataset.page);
+  try {
+    const page = await readerDoc.getPage(n);
+    const viewport = page.getViewport({scale});
+    const canvas = document.createElement('canvas');
+    // Match the device pixel ratio or text is soft on a high-DPI tablet.
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.floor(viewport.width * dpr);
+    canvas.height = Math.floor(viewport.height * dpr);
+    canvas.style.width = `${Math.floor(viewport.width)}px`;
+    canvas.style.height = `${Math.floor(viewport.height)}px`;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    await page.render({canvasContext: ctx, viewport}).promise;
+    placeholder.replaceWith(canvas);
+  } catch (e) {
+    placeholder.textContent = `page ${n} failed`;
+  }
+}
+
+function closeReader() {
+  $('#reader').hidden = true;
+  if (readerObserver) { readerObserver.disconnect(); readerObserver = null; }
+  if (readerDoc) { readerDoc.destroy(); readerDoc = null; }
+  $('#rddoc').replaceChildren();
+  state.readerPaper = null;
+}
+
+async function rezoom(factor) {
+  if (!readerDoc) return;
+  const wrap = $('#rddoc');
+  const first = await readerDoc.getPage(1);
+  const natural = first.getViewport({scale: 1});
+  const current = readerScale || ((wrap.clientWidth - 24) / natural.width);
+  readerScale = Math.min(4, Math.max(0.25, current * factor));
+  await layoutPages();
+}
+
+$('#rdclose').addEventListener('click', closeReader);
+$('#rdin').addEventListener('click', () => rezoom(1.25));
+$('#rdout').addEventListener('click', () => rezoom(0.8));
+$('#rdnotes').addEventListener('click', () => {
+  const pane = $('#rdnotepane');
+  pane.hidden = !pane.hidden;
+});
+
+$('#rdnotesave').addEventListener('click', async () => {
+  const paper = state.readerPaper;
+  if (!paper) return;
+  const button = $('#rdnotesave');
+  button.disabled = true;
+  try {
+    const r = await api(`/api/papers/${encodeURIComponent(paper.key)}/note`, {
+      method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({note: $('#rdnote').value})
+    });
+    paper.note = r.note;
+    $('#rdnotehint').textContent = r.synced_to_drive
+      ? 'Saved, and updated in Drive.'
+      : 'Saved.';
+    loadFiling();
+    loadProcessed();
+  } catch (e) {
+    $('#rdnotehint').textContent = `Could not save: ${e.message}`;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !$('#reader').hidden) closeReader();
 });
 
 // ---------- sidebar ----------

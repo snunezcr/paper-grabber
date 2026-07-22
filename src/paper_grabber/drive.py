@@ -17,12 +17,13 @@ file.
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 from .staging import RemoteFile
 
@@ -216,6 +217,33 @@ class DriveClient:
             md5=response.get("md5Checksum"),
         )
 
+    def download(self, file_id: str, *, spool_bytes: int = 8 * 1024 * 1024) -> IO[bytes]:
+        """Fetch a file's content, returned as a rewound file-like object.
+
+        Spooled rather than held in memory: a small paper stays in RAM, a large
+        one spills to disk. The reader runs against a 1 GB VM, where buffering
+        a whole thesis alongside everything else is exactly the kind of thing
+        that gets a process killed.
+
+        The caller owns the handle and should close it.
+        """
+        buffer: IO[bytes] = tempfile.SpooledTemporaryFile(max_size=spool_bytes)
+        try:
+            request = self._service.files().get_media(fileId=file_id)
+            downloader = MediaIoBaseDownload(buffer, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+        except HttpError as exc:
+            buffer.close()
+            raise DriveError(f"could not download {file_id}: {exc}") from exc
+        except Exception:
+            buffer.close()
+            raise
+
+        buffer.seek(0)
+        return buffer
+
     def file_status(self, file_id: str) -> dict[str, Any]:
         """Report whether an uploaded file is still in Drive.
 
@@ -244,6 +272,15 @@ class DriveClient:
             "trashed": trashed,
             "name": resp.get("name"),
         }
+
+    def set_description(self, file_id: str, description: str | None) -> None:
+        """Update a file's Drive description -- where a paper's note lives."""
+        try:
+            self._service.files().update(
+                fileId=file_id, body={"description": description or ""}
+            ).execute()
+        except HttpError as exc:
+            raise DriveError(f"could not update {file_id}: {exc}") from exc
 
     def exists_in_folder(self, name: str, folder_id: str) -> bool:
         """True when a file of this name is already in the folder.

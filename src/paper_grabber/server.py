@@ -18,18 +18,22 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from fastapi import Request
 from fastapi.responses import (
+    FileResponse,
     HTMLResponse,
     JSONResponse,
     PlainTextResponse,
     RedirectResponse,
+    StreamingResponse,
 )
 from pydantic import BaseModel
 
 from .drive import DriveClient, DriveError
 from .google_auth import DRIVE_SCOPES, AuthError, load_credentials
 from .refresh import RefreshRunner, make_refresh_job
+from .staging import StagingArea
 from .uploader import UploadRunner, make_upload_job
 from .oauth_web import (
     CALLBACK_PATH,
@@ -216,18 +220,32 @@ def create_app(
 
     @app.put("/api/papers/{key}/note")
     def set_note(key: str, body: NoteIn) -> dict[str, Any]:
-        """Save a note. It reaches Drive only when the paper is uploaded."""
+        """Save a note.
+
+        Editable at any point, including after upload. Reading a paper happens
+        *after* it is filed, which is exactly when there is something worth
+        writing down -- so an already-uploaded paper syncs the note onto the
+        Drive file's description instead of refusing the edit.
+        """
         with open_ledger() as led:
             paper = led.get(key)
             if paper is None:
                 raise HTTPException(status_code=404, detail="no such paper")
-            if paper.drive_file_id:
-                raise HTTPException(
-                    status_code=409,
-                    detail="already in Drive; its description is fixed",
-                )
             led.set_note(key, body.note)
-            return {"key": key, "note": led.get(key).note}
+            saved = led.get(key)
+
+        synced = False
+        if saved.drive_file_id:
+            try:
+                open_drive().set_description(saved.drive_file_id, saved.note)
+                synced = True
+            except Exception:
+                # The note is safe in the ledger; Drive can be retried. Failing
+                # the request would suggest nothing was saved, which is wrong,
+                # so every failure mode here is reported rather than raised.
+                synced = False
+
+        return {"key": key, "note": saved.note, "synced_to_drive": synced}
 
     @app.post("/api/decisions")
     def bulk_decision(body: BulkDecisionIn) -> dict[str, Any]:
@@ -243,6 +261,55 @@ def create_app(
                 "decision": body.decision.value,
                 "counts": led.counts(),
             }
+
+    @app.get("/api/papers/{key}/pdf")
+    def paper_pdf(key: str):
+        """Stream a paper's PDF for the in-app reader.
+
+        Served from staging when the file is still local, and pulled from
+        Drive once it has been uploaded and the local copy removed. Proxied
+        rather than linked directly because the browser holds no Google
+        credentials -- the server is the one that is signed in.
+        """
+        with open_ledger() as led:
+            paper = led.get(key)
+            if paper is None:
+                raise HTTPException(status_code=404, detail="no such paper")
+            drive_file_id = paper.drive_file_id
+            staged_name = paper.staged_name
+            title = paper.title
+
+        filename = f"{title[:80]}.pdf".replace('"', "")
+        headers = {"Content-Disposition": f'inline; filename="{filename}"'}
+
+        if staged_name:
+            path = StagingArea(staging_path or (ledger_path.parent / "staging")).path_for(
+                staged_name
+            )
+            if path.exists():
+                return FileResponse(path, media_type="application/pdf", headers=headers)
+
+        if not drive_file_id:
+            raise HTTPException(
+                status_code=404,
+                detail="no PDF for this paper yet -- it has not been fetched",
+            )
+
+        try:
+            buffer = open_drive().download(drive_file_id)
+        except DriveError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        def stream():
+            try:
+                while chunk := buffer.read(256 * 1024):
+                    yield chunk
+            finally:
+                buffer.close()
+
+        return StreamingResponse(
+            stream(), media_type="application/pdf", headers=headers
+        )
 
     @app.get("/api/papers/{key}/bibtex")
     def bibtex(key: str) -> dict[str, Any]:
@@ -529,6 +596,7 @@ def create_app(
                     "scope-check",
                     "bibtex",
                     "suggestions",
+                    "reader",
                     "bulk-decision",
                     "rejected",
                     "notes",
@@ -581,6 +649,10 @@ def create_app(
     @app.post("/api/auth/signout")
     def auth_signout() -> dict[str, bool]:
         return {"signed_out": auth.sign_out()}
+
+    # Vendored PDF.js. Mounted rather than inlined -- 2.7 MB has no business in
+    # the page -- but still same-origin, so the no-external-hosts rule holds.
+    app.mount("/vendor", StaticFiles(directory=STATIC / "vendor"), name="vendor")
 
     return app
 
