@@ -830,10 +830,15 @@ function showError(msg) {
 }
 
 function showCounts(c) {
+  // Of the papers actually triaged -- decided one way or the other -- what
+  // share were kept. Pending papers aren't triaged yet, so they're excluded;
+  // with nothing decided there's no rate to show.
+  const triaged = (c.accepted || 0) + (c.rejected || 0);
+  const rate = triaged ? ` [${Math.round(100 * (c.accepted || 0) / triaged)}%]` : '';
   $('#counts').textContent =
     `${c.pending || 0} pending · ${c.accepted || 0} accepted · ` +
     `${c.rejected || 0} rejected · ${c.filed || 0} filed · ` +
-    `${c.processed || 0} in Drive`;
+    `${c.processed || 0} in Drive${rate}`;
   $('#badge-triage').textContent = c.pending || 0;
   $('#badge-processed').textContent = c.processed || 0;
 }

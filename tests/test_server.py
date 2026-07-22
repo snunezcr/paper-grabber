@@ -1667,3 +1667,11 @@ def test_page_has_the_detach_control(client):
     assert "function detachLocal" in body
     assert "'trash-2'" in body
     assert "method: 'DELETE'" in body
+
+
+def test_counts_bar_shows_acceptance_rate(client):
+    # The accept rate rides on the existing counts payload -- accepted over
+    # everything triaged -- and renders in square brackets after "in Drive".
+    body = client.get("/").text
+    assert "const triaged = (c.accepted || 0) + (c.rejected || 0);" in body
+    assert "in Drive${rate}" in body
