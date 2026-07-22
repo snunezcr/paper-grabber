@@ -1602,3 +1602,7 @@ def test_page_has_the_attach_control(client):
     assert 'id="localfile"' in body
     assert "function attachBtn" in body
     assert "/local-pdf" in body
+    # The button lives in `actions`, which is appended to the card only after
+    # wiring; wiring against the card would find nothing and the click would
+    # do nothing. Guard that regression.
+    assert "wireAttach(actions, p, el)" in body

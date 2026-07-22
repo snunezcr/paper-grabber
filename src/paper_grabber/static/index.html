@@ -1175,7 +1175,7 @@ function filingCard(p, {selectable}) {
       ${iconBtn('cite', 'quote', 'Copy BibTeX')}`;
     actions.querySelector('.note').addEventListener('click', () => editNote(p));
     actions.querySelector('.read')?.addEventListener('click', () => openReader(p));
-    wireAttach(el, p);
+    wireAttach(actions, p, el);
     if (hint) {
       actions.querySelector('.suggest')
         .addEventListener('click', () => acceptSuggestion(p, hint, el));
@@ -1205,7 +1205,7 @@ function filingCard(p, {selectable}) {
         ${iconBtn('cite', 'quote', 'Copy BibTeX')}`;
       actions.querySelector('.note').addEventListener('click', () => editNote(p));
       actions.querySelector('.read')?.addEventListener('click', () => openReader(p));
-      wireAttach(el, p);
+      wireAttach(actions, p, el);
       actions.querySelector('.up').addEventListener('click', () => uploadOne(p, el));
       actions.querySelector('.unfile').addEventListener('click', () => unfile(p));
       actions.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
@@ -1553,9 +1553,12 @@ function attachBtn(p) {
 
 let pendingAttach = null;
 
-function wireAttach(el, p) {
-  el.querySelector('.attach')?.addEventListener('click', () => {
-    pendingAttach = {paper: p, card: el};
+// `actions` holds the button; `card` is the whole card, where cardStatus
+// writes. They differ because the button is wired before `actions` is
+// appended to the card, so querying the card here would find nothing.
+function wireAttach(actions, p, card) {
+  actions.querySelector('.attach')?.addEventListener('click', () => {
+    pendingAttach = {paper: p, card};
     const input = $('#localfile');
     input.value = '';          // let the same file be re-picked
     input.click();
