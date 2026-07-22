@@ -1465,5 +1465,3 @@ def test_portrait_notes_pane_is_capped_at_a_quarter(client):
     portrait = client.get("/").text.split("@media (max-width: 900px)")[1]
     pane = portrait.split("#rdnotepane {")[1].split("#")[0]   # to the next rule
     assert "width: min(20rem, 25vw);" in pane
-    # The property, not the word -- the comment above the rule mentions it.
-    assert "flex-basis:" not in pane

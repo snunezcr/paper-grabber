@@ -409,9 +409,9 @@
   @media (max-width: 900px) {
     #rdnotepane {
       position: absolute; right: 0; bottom: 0; top: 0; z-index: 2;
-      /* An explicit width, not flex-basis: this element is out of flow, so
-         flex-basis was ignored and the pane shrink-to-fit its way to roughly
-         two fifths of a portrait tablet. Capped at a quarter. */
+      /* An out-of-flow element ignores the docked sizing, so it needs an
+         explicit width; without one it shrink-to-fit near two fifths of a
+         portrait tablet. Capped at a quarter. */
       width: min(20rem, 25vw);
       box-shadow: -6px 0 24px rgba(0,0,0,.25);
     }
