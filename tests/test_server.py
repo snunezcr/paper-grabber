@@ -1457,3 +1457,12 @@ def test_can_read_is_false_without_any_pdf_location(seeded):
     p = next(x for x in c.get("/api/pending").json()["papers"]
              if x["title"] == "Paywalled")
     assert p["can_read"] is False
+
+
+def test_portrait_notes_pane_is_capped_at_a_quarter(client):
+    # It is absolutely positioned, so flex-basis does not apply -- it needs an
+    # explicit width or it shrink-to-fits to about two fifths of the screen.
+    body = client.get("/").text
+    portrait = body.split("@media (max-width: 900px)")[1].split("#rdnotepane {")[1].split("}")[0]
+    assert "width: min(20rem, 25vw);" in portrait
+    assert "flex-basis" not in portrait
