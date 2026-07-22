@@ -1465,3 +1465,25 @@ def test_portrait_notes_pane_is_capped_at_a_quarter(client):
     portrait = client.get("/").text.split("@media (max-width: 900px)")[1]
     pane = portrait.split("#rdnotepane {")[1].split("#")[0]   # to the next rule
     assert "width: min(20rem, 25vw);" in pane
+
+
+def test_auth_is_a_single_header_button(client):
+    body = client.get("/").text
+    tb = body.split('<div class="titlebar">')[1].split("</div>")[0]
+    # In the header row, beside Check and Rejected.
+    assert 'id="authbtn"' in tb
+    # The old separate row and its status line are gone.
+    assert 'id="authbar"' not in body
+    assert "authmsg" not in body
+
+
+def test_no_access_renewal_text(client):
+    # The renewal note described something automatic the user cannot act on.
+    assert "renew automatically" not in client.get("/").text
+
+
+def test_auth_button_toggles_sign_in_and_out(client):
+    body = client.get("/").text
+    assert "state.authSignedIn" in body
+    assert "'/api/auth/signout'" in body
+    assert "'/auth/google/start'" in body

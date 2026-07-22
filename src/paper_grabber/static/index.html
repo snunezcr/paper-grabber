@@ -59,17 +59,14 @@
   @media (prefers-reduced-motion: reduce) { #check .spin { animation: none; } }
   .titlebar h1 { font-size: 1.05rem; margin: 0; font-weight: 600; }
   #counts { color: var(--muted); font-size: .85rem; font-variant-numeric: tabular-nums; }
-  #authbar {
-    display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
-    margin-top: .45rem; font-size: .87rem; color: var(--muted);
+  /* Set off from Check/Rejected by an extra gap: it acts on your account,
+     not on the queue, so it should not read as one of that cluster. */
+  #authbtn {
+    margin-left: .5rem; min-height: 40px; padding: 0 .9rem; cursor: pointer;
+    white-space: nowrap; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--card); color: var(--ink); font-size: .88rem; font-weight: 600;
   }
-  #authbar a#signin {
-    display: inline-flex; align-items: center; min-height: 40px; padding: 0 .9rem;
-    border: 1px solid var(--accent); border-radius: 8px; color: var(--accent);
-    text-decoration: none; font-weight: 600;
-  }
-  #authbar.ok a#signin { display: none; }
-  #authbar.warn #authmsg { color: var(--reject); }
+  #authbtn.warn { border-color: var(--reject); color: var(--reject); }
   nav { display: flex; gap: .25rem; margin-top: .5rem; }
   nav button {
     flex: 1; min-height: 44px; background: none; border: 0; cursor: pointer;
@@ -515,11 +512,7 @@
     <button id="check" aria-label="Check now" data-tip="Check mail for new alerts">
       <span class="spin" hidden></span><span class="glyph"></span>
     </button>
-  </div>
-  <div id="authbar" hidden>
-    <span id="authmsg"></span>
-    <a id="signin" href="/auth/google/start">Sign in with Google</a>
-    <button id="signout" class="linkbtn" hidden>Sign out</button>
+    <button id="authbtn" hidden>Sign in</button>
   </div>
   <nav>
     <button id="tab-triage" aria-selected="true">Triage<span class="badge" id="badge-triage">0</span></button>
@@ -787,7 +780,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
 let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               pending: [], alerts: new Set(), knownAlerts: new Set(),
               query: '', suggestions: {}, notePaper: null, panelMode: null,
-              readerPaper: null };
+              readerPaper: null, authSignedIn: false };
 
 // Capabilities this page expects the server to have.
 const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader'];
@@ -1714,46 +1707,45 @@ $('#rejectedbtn').addEventListener('click', () => {
 // ---------- sign-in ----------
 
 async function loadAuth() {
+  const btn = $('#authbtn');
   try {
     const s = await api('/api/auth/status');
-    const bar = $('#authbar');
-    bar.hidden = false;
-    bar.classList.toggle('ok', s.signed_in);
-    bar.classList.toggle('warn', !s.redirect_ok || !s.has_client_secrets);
-    $('#signout').hidden = !s.signed_in;
+    btn.hidden = false;
+    state.authSignedIn = s.signed_in && !s.needs_reauth;
 
-    if (s.needs_reauth) {
-      // Signed in, but the grant is too narrow. Only a fresh consent widens
-      // it, so offer the button again rather than reporting success.
-      bar.classList.remove('ok');
-      bar.classList.add('warn');
-      $('#authmsg').textContent = s.has_gmail
-        ? 'Signed in, but missing some permissions — sign in again'
-        : 'Signed in for Drive only. Sign in again to grant Gmail access, ' +
-          'or mail will fall back to IMAP.';
-    } else if (s.signed_in) {
-      $('#authmsg').textContent = s.valid
-        ? 'Signed in to Google'
-        : 'Signed in; access will renew automatically';
-    } else if (!s.has_client_secrets) {
-      $('#authmsg').textContent = 'No credentials.json on the server yet';
-    } else if (!s.redirect_ok) {
-      // Google refuses plain http from anything but localhost, so signing in
-      // from the tablet over a LAN address cannot work. Say so plainly.
-      $('#authmsg').textContent = s.redirect_problem;
+    // The label carries the state; the diagnostics that used to be gray text
+    // move to the tooltip, so a real problem is still reachable without a
+    // permanent line eating header space.
+    if (state.authSignedIn) {
+      btn.textContent = 'Sign out';
+      btn.classList.remove('warn');
+      btn.setAttribute('data-tip', 'Signed in to Google');
     } else {
-      $('#authmsg').textContent = 'Not signed in';
+      btn.textContent = s.needs_reauth ? 'Re-sign in' : 'Sign in';
+      const problem =
+        !s.has_client_secrets ? 'No credentials.json on the server yet'
+        : !s.redirect_ok ? s.redirect_problem
+        : s.needs_reauth ? (s.has_gmail
+            ? 'Signed in, but missing some permissions — sign in again'
+            : 'Signed in for Drive only; sign in again to grant Gmail access')
+        : 'Sign in with Google';
+      btn.setAttribute('data-tip', problem);
+      btn.classList.toggle('warn', s.needs_reauth || !s.has_client_secrets || !s.redirect_ok);
     }
   } catch (e) {
-    $('#authbar').hidden = true;
+    btn.hidden = true;
   }
 }
 
-$('#signout').addEventListener('click', async () => {
-  try {
-    await api('/api/auth/signout', {method: 'POST'});
-    loadAuth();
-  } catch (e) { showError(e.message); }
+$('#authbtn').addEventListener('click', async () => {
+  if (state.authSignedIn) {
+    try {
+      await api('/api/auth/signout', {method: 'POST'});
+      loadAuth();
+    } catch (e) { showError(e.message); }
+  } else {
+    window.location.href = '/auth/google/start';
+  }
 });
 
 function noticeSignInReturn() {
