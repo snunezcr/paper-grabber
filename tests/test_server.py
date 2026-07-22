@@ -1343,3 +1343,16 @@ def test_reader_renders_pages_lazily(client):
 
 def test_reader_is_an_advertised_capability(client):
     assert "reader" in client.get("/api/version").json()["capabilities"]
+
+
+def test_reader_sits_below_the_header_not_over_it(client):
+    # A full-screen takeover hid the tabs and Check now; the reader should
+    # leave the app's navigation reachable while reading.
+    body = client.get("/").text
+    rule = body.split("#reader {")[1].split("}")[0]
+    assert "top: var(--header-h" in rule
+    assert "inset: 0" not in rule
+
+
+def test_leaving_a_tab_closes_the_reader(client):
+    assert "if (state.readerPaper) closeReader();" in client.get("/").text
