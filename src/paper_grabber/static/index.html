@@ -528,7 +528,14 @@
   .rdink { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; pointer-events: none; }
   #reader.mode-draw .rdtext, #reader.mode-erase .rdtext { pointer-events: none; }
   #reader.mode-draw #rddoc { cursor: crosshair; }
-  #reader.mode-erase #rddoc { cursor: pointer; }
+  #reader.mode-erase #rddoc { cursor: none; }
+  /* The area eraser's cursor: a circle the size of its reach, following the pen. */
+  #rderaser {
+    position: fixed; z-index: 22; width: 28px; height: 28px; margin: -14px 0 0 -14px;
+    border: 2px solid var(--reject); border-radius: 50%;
+    background: rgba(200,40,40,.12); pointer-events: none;
+  }
+  #rderaser[hidden] { display: none; }
   /* No native gesture scroll while drawing -- the pen would otherwise pan the
      page as it moves. Navigation comes back via a two-finger pan. */
   #reader.mode-draw #rddoc, #reader.mode-erase #rddoc { touch-action: none; }
@@ -905,6 +912,7 @@
       <div id="rdhllist"></div>
     </aside>
   </div>
+  <div id="rderaser" hidden></div>
   <div id="rdhint" hidden>
     <span>Select text in the page to highlight it.</span>
     <button id="rdhintclose" aria-label="Dismiss">&times;</button>
@@ -3198,7 +3206,6 @@ function paintPageHighlights(hlEl, page) {
 // stroke keeps the line a constant width on screen.
 function paintPageInk(svg, page) {
   svg.replaceChildren();
-  const erasing = state.readerMode === 'erase';
   for (const a of state.annotations) {
     if (a.type !== 'ink' || a.page !== page) continue;
     const poly = document.createElementNS(SVGNS, 'polyline');
@@ -3209,11 +3216,6 @@ function paintPageInk(svg, page) {
     poly.setAttribute('stroke-linejoin', 'round');
     poly.setAttribute('vector-effect', 'non-scaling-stroke');
     poly.setAttribute('points', a.points.map(([x, y]) => `${x * 100},${y * 100}`).join(' '));
-    if (erasing) {
-      poly.style.pointerEvents = 'stroke';
-      poly.style.cursor = 'pointer';
-      poly.addEventListener('pointerdown', e => { e.stopPropagation(); deleteAnnotation(a.id); });
-    }
     svg.appendChild(poly);
   }
 }
@@ -3303,15 +3305,16 @@ $('#rdhintclose').addEventListener('click', dismissHlHint);
 
 function renderAnnotationList() {
   const list = $('#rdhllist');
-  $('#rdhlhint').hidden = state.annotations.length > 0;
-  list.replaceChildren(...state.annotations.map(a => {
+  // Highlights only -- drawings are managed with the eraser and undo, not here.
+  const highlights = state.annotations.filter(a => a.type !== 'ink');
+  $('#rdhlhint').hidden = highlights.length > 0;
+  list.replaceChildren(...highlights.map(a => {
     const row = document.createElement('div');
     row.className = 'hlitem';
-    const label = a.type === 'ink' ? `Drawing · p.${a.page}` : (a.quote || '(no text)');
     row.innerHTML =
       `<span class="hldot" style="background:${a.color}"></span>` +
-      `<span class="hlquote">${esc(label)}</span>` +
-      `<button class="hldel" aria-label="Delete annotation">${icon('trash-2')}</button>`;
+      `<span class="hlquote">${esc(a.quote || '(no text)')}</span>` +
+      `<button class="hldel" aria-label="Delete highlight">${icon('trash-2')}</button>`;
     row.querySelector('.hlquote').addEventListener('click', () => {
       const wrap = [...$('#rddoc').querySelectorAll('.rdpagewrap')]
         .find(x => Number(x.dataset.page) === a.page);
@@ -3366,7 +3369,7 @@ function setReaderMode(mode) {
   reader.classList.add('mode-' + mode);
   $('#rddrawopts').hidden = mode !== 'draw';
   if (mode !== 'highlight') { $('#rdhltools').hidden = true; state.hlRange = null; }
-  repaintAnnotations();   // erase toggles whether strokes are tappable
+  if (mode !== 'erase') $('#rderaser').hidden = true;
 }
 
 // ---------- freehand drawing ----------
@@ -3460,6 +3463,59 @@ function endPan(e) {
 $('#rddoc').addEventListener('pointerup', endPan);
 $('#rddoc').addEventListener('pointercancel', endPan);
 
+// ---------- area eraser ----------
+// Sweep the pen (or mouse) over strokes to remove them -- a circular eraser,
+// whole-stroke on contact, not a per-line tap.
+let erasing = null;
+const ERASE_R = 14;   // eraser radius, px
+
+function eraseAt(e) {
+  if (!erasing) return;
+  const box = erasing.box, page = erasing.page;
+  const before = state.annotations.length;
+  state.annotations = state.annotations.filter(a => {
+    if (a.type !== 'ink' || a.page !== page) return true;
+    const hit = a.points.some(([x, y]) => {
+      const dx = x * box.width - (e.clientX - box.left);
+      const dy = y * box.height - (e.clientY - box.top);
+      return dx * dx + dy * dy < ERASE_R * ERASE_R;
+    });
+    return !hit;
+  });
+  if (state.annotations.length !== before) {
+    erasing.changed = true;
+    repaintAnnotations();
+    renderAnnotationList();
+  }
+}
+
+$('#rddoc').addEventListener('pointerdown', e => {
+  if (state.readerMode !== 'erase' || e.pointerType === 'touch') return;
+  const wrap = pageWrapAt(e.clientX, e.clientY);
+  if (!wrap) return;
+  e.preventDefault();
+  erasing = {page: Number(wrap.dataset.page), box: wrap.getBoundingClientRect(), changed: false};
+  $('#rddoc').setPointerCapture?.(e.pointerId);
+  eraseAt(e);
+});
+$('#rddoc').addEventListener('pointermove', e => {
+  if (state.readerMode !== 'erase') return;
+  const c = $('#rderaser');   // the eraser cursor follows the pointer
+  c.hidden = false;
+  c.style.left = `${e.clientX}px`;
+  c.style.top = `${e.clientY}px`;
+  if (erasing && e.pointerType !== 'touch') { e.preventDefault(); eraseAt(e); }
+});
+function endErase(e) {
+  if (!erasing) return;
+  const changed = erasing.changed;
+  erasing = null;
+  if (changed) saveAnnotations();
+}
+$('#rddoc').addEventListener('pointerup', endErase);
+$('#rddoc').addEventListener('pointercancel', endErase);
+$('#rddoc').addEventListener('pointerleave', () => { $('#rderaser').hidden = true; });
+
 function inkUndo() {
   for (let i = state.annotations.length - 1; i >= 0; i--) {
     if (state.annotations[i].type === 'ink') { state.annotations.splice(i, 1); break; }
@@ -3491,6 +3547,8 @@ function closeReader() {
   if (fs === $('#reader')) (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
   $('#reader').classList.remove('rdmax');
   $('#rdhltools').hidden = true;
+  $('#rderaser').hidden = true;
+  drawing = null; erasing = null;
   state.annotations = [];
   $('#reader').hidden = true;
   renderObs?.disconnect(); renderObs = null;
