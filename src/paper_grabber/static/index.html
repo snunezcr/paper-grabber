@@ -635,12 +635,15 @@
       <span class="basefolder" id="basefolder">No base folder set</span>
       <button class="linkbtn" id="setbase">Change base folder</button>
     </div>
-    <div id="unfiled"></div>
-    <div id="nofiling" class="note" hidden>Nothing accepted yet. Papers you mark interesting appear here.</div>
     <div id="filed-wrap" hidden>
       <div class="section-label">Ready to upload</div>
       <div id="filed"></div>
     </div>
+    <div id="unfiled-wrap" hidden>
+      <div class="section-label">Pending upload</div>
+      <div id="unfiled"></div>
+    </div>
+    <div id="nofiling" class="note" hidden>Nothing accepted yet. Papers you keep appear here.</div>
   </section>
 </main>
 </div>
@@ -2011,6 +2014,7 @@ function renderFiling() {
   $('#unfiled').replaceChildren(...unfiled.map(p => filingCard(p, {selectable: true})));
   $('#filed').replaceChildren(...filed.map(p => filingCard(p, {selectable: false})));
   $('#filed-wrap').hidden = filed.length === 0;
+  $('#unfiled-wrap').hidden = unfiled.length === 0;
   $('#badge-filing').textContent = data.unfiled.length;   // the badge is the true total
   setListEmpty('#nofiling', unfiled.length + filed.length,
     data.unfiled.length + data.filed.length,
