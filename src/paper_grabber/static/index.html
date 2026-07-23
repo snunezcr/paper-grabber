@@ -245,6 +245,20 @@
   }
   .swipefb.keep { left: 16px; color: var(--accept); transform: rotate(-8deg); }
   .swipefb.skip { right: 16px; color: var(--reject); transform: rotate(8deg); }
+  /* One-time hint that the cards can be swiped -- the gesture has no other
+     affordance. Dismissed for good on the first decision or the close button. */
+  #swipehint {
+    display: flex; align-items: center; gap: .5rem;
+    margin-bottom: 1rem; padding: .55rem .5rem .55rem .8rem;
+    border: 1px solid var(--line); border-radius: 10px;
+    background: var(--card); color: var(--muted); font-size: .88rem;
+  }
+  #swipehint span { flex: 1; }
+  #swipehintclose {
+    flex: 0 0 auto; width: 32px; height: 32px; cursor: pointer; line-height: 1;
+    border: 1px solid var(--line); border-radius: 7px;
+    background: none; color: var(--muted); font-size: 1.1rem;
+  }
   @media (prefers-reduced-motion: reduce) {
     #list .card.flinging { transition: none; }
     .swipefb { transition: none; }
@@ -307,8 +321,8 @@
     min-width: 44px; min-height: 44px; padding: 0 .55rem;
   }
   .actions .iconbtn { flex: 0 0 auto; }
-  /* Interesting and Skip stay wide: they are the whole point of a triage
-     card, and shrinking them to 44px would put the two decisions in a corner. */
+  /* Keep and Drop stay wide: they are the whole point of a triage card, and
+     shrinking them to 44px would put the two decisions in a corner. */
   .actions .yes, .actions .no { flex: 1; }
   /* One size for every icon button on a card, so the row reads as a set
      rather than as buttons that happen to sit together. */
@@ -548,7 +562,7 @@
     <h1>Research Stream</h1>
     <span id="counts"></span>
     <button id="rejectedbtn" class="danger" aria-pressed="false"
-            aria-label="Rejected" data-tip="Show rejected papers">${''}</button>
+            aria-label="Dropped" data-tip="Show dropped papers">${''}</button>
     <button id="check" aria-label="Check now" data-tip="Check mail for new alerts">
       <span class="spin" hidden></span><span class="glyph"></span>
     </button>
@@ -598,13 +612,17 @@
   <div id="notice" role="status" aria-live="polite" hidden></div>
 
   <section id="view-triage">
+    <div id="swipehint" role="note" hidden>
+      <span>Tip: swipe a card right to keep, left to drop — or press K / D.</span>
+      <button id="swipehintclose" aria-label="Dismiss tip" data-tip="Dismiss">&times;</button>
+    </div>
     <div id="list"></div>
     <div id="empty" hidden>Nothing to triage here. Press Check now, or pick another alert above.</div>
   </section>
 
   <section id="view-rejected" hidden>
     <div id="rejected"></div>
-    <div id="norejected" class="note" hidden>Nothing rejected yet.</div>
+    <div id="norejected" class="note" hidden>Nothing dropped yet.</div>
   </section>
 
   <section id="view-processed" hidden>
@@ -630,7 +648,7 @@
 <div id="filebar" hidden>
   <span class="count" id="selcount">0 selected</span>
   <button class="ghost iconbtn" id="selall" aria-label="Select all" data-tip="Select all"></button>
-  <button class="danger iconbtn" id="selreject" aria-label="Reject" data-tip="Reject the selected papers"></button>
+  <button class="danger iconbtn" id="selreject" aria-label="Drop" data-tip="Drop the selected papers"></button>
   <button class="iconbtn" id="filesel" aria-label="File to" data-tip="Choose a destination folder"></button>
 </div>
 
@@ -980,12 +998,12 @@ function triageCard(p) {
   el.className = 'card';
   el.innerHTML = `
     <div class="swipefb keep" aria-hidden="true">Keep</div>
-    <div class="swipefb skip" aria-hidden="true">Skip</div>` + cardBody(p) + `
+    <div class="swipefb skip" aria-hidden="true">Drop</div>` + cardBody(p) + `
     <div class="actions">
-      ${/* Ordered to match the swipe axis: skip (red) left, keep (green) right,
+      ${/* Ordered to match the swipe axis: drop (red) left, keep (green) right,
            so swiping left and the left button mean the same thing. */''}
-      ${iconBtn('no', 'x', 'Skip (press S)')}
-      ${iconBtn('yes', 'check', 'Interesting (press A)')}
+      ${iconBtn('no', 'x', 'Drop (press D)')}
+      ${iconBtn('yes', 'check', 'Keep (press K)')}
     </div>`;
   el._paper = p;   // so keyboard and swipe handlers can find it
   wireAbstract(el);
@@ -999,6 +1017,8 @@ function triageCard(p) {
 // One path records a triage decision, however it was made. A swipe flings the
 // card the way it went (fling = +1 keep / -1 skip); a button or a key fades it.
 async function commitDecision(card, paper, decision, {fling = 0} = {}) {
+  // Making any decision counts as having learned the gesture; retire the tip.
+  dismissSwipeHint();
   if (fling) {
     card.classList.remove('dragging');
     card.classList.add('flinging');
@@ -1139,8 +1159,8 @@ function wireSwipe(card, paper) {
 }
 
 // ---------- keyboard to triage ----------
-// For when a keyboard is attached: J/K or arrows move the focus ring, A or ->
-// keeps, S or <- skips, O/Enter reads, U undoes. The ring is a keyboard-only
+// For when a keyboard is attached: up/down arrows move the focus ring, K or ->
+// keeps, D or <- drops, O/Enter reads, U undoes. The ring is a keyboard-only
 // affordance, cleared on the next touch of the list.
 function triageCards() {
   return [...$('#list').querySelectorAll('.card:not(.going):not(.flinging)')];
@@ -1177,10 +1197,10 @@ document.addEventListener('keydown', e => {
   // Not while a dialog or the reader is up.
   if (!notePanel.hidden || !$('#sheet').hidden || !$('#reader').hidden) return;
   switch (e.key) {
-    case 'j': case 'ArrowDown': e.preventDefault(); moveTriageFocus(1); break;
-    case 'k': case 'ArrowUp': e.preventDefault(); moveTriageFocus(-1); break;
-    case 'a': case 'ArrowRight': e.preventDefault(); keyDecide('accepted'); break;
-    case 's': case 'ArrowLeft': e.preventDefault(); keyDecide('rejected'); break;
+    case 'ArrowDown': e.preventDefault(); moveTriageFocus(1); break;
+    case 'ArrowUp': e.preventDefault(); moveTriageFocus(-1); break;
+    case 'k': case 'ArrowRight': e.preventDefault(); keyDecide('accepted'); break;
+    case 'd': case 'ArrowLeft': e.preventDefault(); keyDecide('rejected'); break;
     case 'o': case 'Enter': {
       const c = focusedCard() || triageCards()[0];
       if (c && c._paper && hasPdfFile(c._paper)) { e.preventDefault(); openReader(c._paper); }
@@ -1192,6 +1212,17 @@ document.addEventListener('keydown', e => {
 
 // Touching the list is a pointer session, so drop the keyboard ring.
 $('#list').addEventListener('pointerdown', () => setFocusedCard(null));
+
+// ---------- one-time swipe hint ----------
+const SWIPE_HINT_KEY = 'rs.swipehint.seen';
+function swipeHintSeen() {
+  try { return localStorage.getItem(SWIPE_HINT_KEY) === '1'; } catch (e) { return true; }
+}
+function dismissSwipeHint() {
+  $('#swipehint').hidden = true;
+  try { localStorage.setItem(SWIPE_HINT_KEY, '1'); } catch (e) {}
+}
+$('#swipehintclose').addEventListener('click', dismissSwipeHint);
 
 const NO_ALERT = '(no alert)';
 
@@ -1220,7 +1251,7 @@ function alertRate(name) {
   if (!triaged) return null;
   if (triaged < MIN_TRIAGED_FOR_RATE) return {text: `${triaged} triaged`, skipRate: -1};
   const pct = Math.round(100 * (s.rejected || 0) / triaged);
-  return {text: `${pct}% skipped · ${triaged} triaged`, skipRate: (s.rejected || 0) / triaged};
+  return {text: `${pct}% dropped · ${triaged} triaged`, skipRate: (s.rejected || 0) / triaged};
 }
 
 function renderAlertFilter() {
@@ -1255,7 +1286,7 @@ function renderAlertFilter() {
     entries.sort((a, b) => b[1] - a[1]);
   }
   $('#alertsort').textContent =
-    state.alertSort === 'skip' ? 'Sort: most skipped' : 'Sort: most pending';
+    state.alertSort === 'skip' ? 'Sort: most dropped' : 'Sort: most pending';
 
   $('#alertoptions').replaceChildren(...entries.map(([name, n]) => {
     const row = document.createElement('label');
@@ -1341,6 +1372,8 @@ function renderTriage() {
   renderAlertFilter();
   const shown = visiblePending();
   $('#list').replaceChildren(...shown.map(triageCard));
+  // Only worth showing the swipe tip when there's a card to try it on.
+  $('#swipehint').hidden = swipeHintSeen() || shown.length === 0;
 
   const terms = queryTerms();
   const nothingChosen = alertCounts().size > 1 && state.alerts.size === 0;
@@ -1790,7 +1823,7 @@ async function loadRejected() {
     showCounts(data.counts);
     $('#rejected').replaceChildren(...data.papers.map(rejectedCard));
     $('#norejected').hidden = data.papers.length > 0;
-  } catch (e) { showError(`Could not load rejected papers: ${e.message}`); }
+  } catch (e) { showError(`Could not load dropped papers: ${e.message}`); }
 }
 
 async function loadProcessed() {
@@ -1936,14 +1969,14 @@ $('#selreject').addEventListener('click', async () => {
     });
     showCounts(data.counts);
     state.selected.clear();
-    // Rejected papers are suppressed on every future check, so a mis-tap here
+    // Dropped papers are suppressed on every future check, so a mis-tap here
     // would bury them silently. One tap puts them back.
     state.lastUndo = {keys: data.updated, decision: 'accepted',
-                      label: `${data.updated.length} rejected`};
+                      label: `${data.updated.length} dropped`};
     $('#undo').hidden = false;
-    showNotice(`${data.updated.length} rejected`);
+    showNotice(`${data.updated.length} dropped`);
     loadFiling();
-  } catch (e) { showError(`Could not reject: ${e.message}`); }
+  } catch (e) { showError(`Could not drop: ${e.message}`); }
 });
 
 $('#filesel').addEventListener('click', () => {

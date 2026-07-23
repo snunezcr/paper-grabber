@@ -1079,7 +1079,7 @@ def test_rejected_button_has_no_count(client):
     bar = body.split('<div class="titlebar">')[1].split("</div>")[0]
     assert "badge-rejected" not in bar
     # The label lives in aria-label and the tooltip now that it is an icon.
-    assert 'aria-label="Rejected"' in bar
+    assert 'aria-label="Dropped"' in bar
 
 
 # --- notes --------------------------------------------------------------------
@@ -1740,11 +1740,11 @@ def test_sidebar_renders_skip_rate_and_sort_toggle(client):
     # The rate, its noise threshold, and the stash off the pending payload.
     assert "function alertRate" in body
     assert "const MIN_TRIAGED_FOR_RATE = 5;" in body
-    assert "% skipped · ${triaged} triaged" in body
+    assert "% dropped · ${triaged} triaged" in body
     assert "state.alertStats = data.alert_stats || {};" in body
-    # The sort toggle between pending volume and skip rate.
+    # The sort toggle between pending volume and drop rate.
     assert 'id="alertsort"' in body
-    assert "state.alertSort === 'skip' ? 'Sort: most skipped'" in body
+    assert "state.alertSort === 'skip' ? 'Sort: most dropped'" in body
 
 
 def test_triage_supports_swipe_and_keyboard(client):
@@ -1756,12 +1756,37 @@ def test_triage_supports_swipe_and_keyboard(client):
     assert 'class="swipefb keep"' in body
     assert 'class="swipefb skip"' in body
     assert "touch-action: pan-y" in body
-    # Keyboard: navigation and the accept/skip keys, both letters and arrows.
+    # Keyboard: Keep/Drop mnemonic keys, plus the direction-matching arrows.
     assert "function keyDecide" in body
-    assert "case 'a': case 'ArrowRight':" in body
-    assert "case 's': case 'ArrowLeft':" in body
+    assert "case 'k': case 'ArrowRight':" in body
+    assert "case 'd': case 'ArrowLeft':" in body
     # Button, swipe, and key all record through one path.
     assert "async function commitDecision" in body
+
+
+def test_decision_vocabulary_is_keep_and_drop(client):
+    body = client.get("/").text
+    # The accept/reject actions read as Keep/Drop everywhere they show text.
+    assert ">Keep</div>" in body                       # swipe stamp
+    assert ">Drop</div>" in body
+    assert "'Keep (press K)'" in body                   # triage buttons
+    assert "'Drop (press D)'" in body
+    assert 'data-tip="Drop the selected papers"' in body   # bulk action
+    assert 'data-tip="Show dropped papers"' in body        # header toggle
+    assert "Nothing dropped yet." in body                  # empty state
+    # The old vocabulary is gone from what the user reads.
+    assert "Interesting (press A)" not in body
+    assert "Nothing rejected yet." not in body
+
+
+def test_swipe_hint_shows_once(client):
+    body = client.get("/").text
+    assert 'id="swipehint"' in body
+    assert "swipe a card right to keep, left to drop" in body
+    assert "const SWIPE_HINT_KEY = 'rs.swipehint.seen';" in body
+    # Retired on the first decision and remembered across visits.
+    assert "dismissSwipeHint();" in body
+    assert "swipeHintSeen() || shown.length === 0" in body
 
 
 def test_risky_filing_actions_carry_text_labels(client):
