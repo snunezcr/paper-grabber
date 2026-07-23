@@ -12,13 +12,13 @@
      bottom of the viewport, under the thumb rather than above a long
      abstract. */
   :root {
-    --bg: #fbfbfa; --card: #fff; --ink: #1a1a1a; --muted: #6b6b6b;
+    --bg: #fbfbfa; --card: #fff; --ink: #1a1a1a; --muted: #5b5b5b;
     --line: #e4e4e1; --accept: #1a7f4b; --reject: #a33; --accent: #2b5fd9;
     --sheet: #fff;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #17181a; --card: #202225; --ink: #eceff1; --muted: #9aa0a6;
+      --bg: #17181a; --card: #202225; --ink: #eceff1; --muted: #a3a9af;
       --line: #303338; --accept: #4ec27f; --reject: #e2726e; --accent: #7aa2f7;
       --sheet: #202225;
     }
@@ -462,8 +462,8 @@
       position: absolute; right: 0; bottom: 0; top: 0; z-index: 2;
       /* An out-of-flow element ignores the docked sizing, so it needs an
          explicit width; without one it shrink-to-fit near two fifths of a
-         portrait tablet. Capped at a quarter. */
-      width: min(20rem, 25vw);
+         portrait tablet. Capped at a third. */
+      width: min(28rem, 33vw);
       box-shadow: -6px 0 24px rgba(0,0,0,.25);
     }
     .rdbody { position: relative; }
@@ -1131,6 +1131,15 @@ $('#undo').addEventListener('click', popUndo);
 // (touch-action: pan-y), so only a clearly horizontal gesture is captured.
 const SWIPE_COMMIT = 0.28;   // fraction of card width that commits the decision
 
+// A short confirmation buzz the instant a swipe commits, so the decision lands
+// in the hand, not just the eye. Android/Chromium only -- silent on desktop and
+// iOS -- and suppressed for anyone who has asked for reduced motion.
+function vibrateTick() {
+  if (window.matchMedia
+      && matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  if (navigator.vibrate) navigator.vibrate(10);
+}
+
 function swipeStamps(card) {
   return [card.querySelector('.swipefb.keep'), card.querySelector('.swipefb.skip')];
 }
@@ -1181,6 +1190,7 @@ function wireSwipe(card, paper) {
     if (Math.abs(dx / width) >= SWIPE_COMMIT) {
       done = true;
       const dir = dx > 0 ? 1 : -1;
+      vibrateTick();   // only on commit, never on the snap-back
       commitDecision(card, paper, dir > 0 ? 'accepted' : 'rejected', {fling: dir});
     } else {
       resetSwipe(card);

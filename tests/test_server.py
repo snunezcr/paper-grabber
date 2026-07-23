@@ -1487,12 +1487,21 @@ def test_can_read_is_false_without_any_pdf_location(seeded):
     assert p["can_read"] is False
 
 
-def test_portrait_notes_pane_is_capped_at_a_quarter(client):
+def test_portrait_notes_pane_is_capped_at_a_third(client):
     # It is absolutely positioned, so flex-basis does not apply -- it needs an
     # explicit width or it shrink-to-fits to about two fifths of the screen.
     portrait = client.get("/").text.split("@media (max-width: 900px)")[1]
     pane = portrait.split("#rdnotepane {")[1].split("#")[0]   # to the next rule
-    assert "width: min(20rem, 25vw);" in pane
+    assert "width: min(28rem, 33vw);" in pane
+
+
+def test_swipe_commit_gives_a_haptic_tick(client):
+    body = client.get("/").text
+    assert "function vibrateTick" in body
+    assert "navigator.vibrate(10)" in body
+    # Guarded by reduced-motion, and fired only on commit.
+    assert "matchMedia('(prefers-reduced-motion: reduce)').matches) return;" in body
+    assert "vibrateTick();   // only on commit, never on the snap-back" in body
 
 
 def test_auth_is_a_single_header_button(client):
