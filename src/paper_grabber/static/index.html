@@ -1519,7 +1519,10 @@ function filingCard(p, {selectable}) {
     // having decided where the PDF goes.
     const actions = document.createElement('div');
     actions.className = 'actions filed-actions';
-    const hint = state.suggestions?.[p.key];
+    // Only suggest a destination for a paper there's actually a PDF to file --
+    // otherwise the one-click "file here" lands it in Ready to upload with
+    // nothing to upload. Attaching a PDF brings the suggestion back.
+    const hint = hasPdfFile(p) ? state.suggestions?.[p.key] : null;
     actions.innerHTML = `
       ${hint ? `<button class="suggest" data-tip="${esc(hint.reason)}">${icon('folder-input')}<span>${esc(hint.folder_name)}</span></button>` : ''}
       ${attachBtn(p)}

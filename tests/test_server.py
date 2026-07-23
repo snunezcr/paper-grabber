@@ -1842,3 +1842,10 @@ def test_filters_apply_across_all_list_views(client):
     assert "['triage', 'filing', 'processed', 'rejected'].includes(state.tab)" in body
     # A filtered-empty list reads differently from a genuinely empty one.
     assert "Nothing matches this filter." in body
+
+
+def test_no_folder_suggestion_without_a_pdf(client):
+    # A suggestion is a one-click "file here"; offering it for a paper with no
+    # PDF lands it in Ready to upload with nothing to upload.
+    body = client.get("/").text
+    assert "const hint = hasPdfFile(p) ? state.suggestions?.[p.key] : null;" in body
