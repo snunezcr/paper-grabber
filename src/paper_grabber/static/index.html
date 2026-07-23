@@ -505,9 +505,48 @@
     background: var(--bg); text-align: center;
     -webkit-overflow-scrolling: touch;
   }
-  #rddoc canvas, #rddoc .rdpage {
-    display: block; margin: 0 auto 1rem; max-width: 100%;
+  #rddoc .rdpagewrap, #rddoc .rdpage {
+    position: relative; display: block; margin: 0 auto 1rem; max-width: 100%;
     background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.22);
+  }
+  #rddoc .rdpagewrap canvas { display: block; }
+  /* Highlights sit under the text layer so selection still works over them;
+     multiply lets the colour tint the black text like a real marker. */
+  .rdhl { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+  .rdhlrect { position: absolute; opacity: .4; border-radius: 2px; mix-blend-mode: multiply; }
+  /* PDF.js text layer: invisible positioned spans, on top, for selection.
+     --scale-factor (set inline = render scale) drives its own sizing. */
+  .rdtext {
+    position: absolute; inset: 0; z-index: 2; overflow: clip; line-height: 1;
+    text-align: initial; transform-origin: 0 0; forced-color-adjust: none;
+  }
+  .rdtext span, .rdtext br {
+    position: absolute; white-space: pre; color: transparent; transform-origin: 0 0;
+  }
+  .rdtext ::selection { background: rgba(120,160,230,.4); }
+  /* Floating colour picker shown while text is selected. */
+  #rdhltools {
+    position: fixed; z-index: 30; display: flex; gap: .35rem; padding: .35rem;
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.28);
+  }
+  #rdhltools[hidden] { display: none; }
+  .hlcolor {
+    width: 30px; height: 30px; border-radius: 50%; cursor: pointer;
+    border: 1px solid rgba(0,0,0,.25);
+  }
+  /* Highlights list in the notes pane. */
+  #rdhllist { display: flex; flex-direction: column; gap: .4rem; }
+  .hlitem { display: flex; align-items: flex-start; gap: .45rem; font-size: .82rem; }
+  .hlitem .hldot { flex: 0 0 auto; width: .7rem; height: .7rem; border-radius: 2px; margin-top: .25rem; }
+  .hlitem .hlquote {
+    flex: 1; min-width: 0; color: var(--ink); cursor: pointer;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .hlitem .hldel {
+    flex: 0 0 auto; width: 28px; height: 28px; cursor: pointer; color: var(--muted);
+    border: 1px solid var(--line); border-radius: 6px; background: none;
+    display: inline-flex; align-items: center; justify-content: center;
   }
   #rdnotepane {
     /* Landscape has the width to spare, so give notes real room to write in
@@ -785,7 +824,15 @@
       <textarea id="rdnote" placeholder="Why this paper matters, what to read first…"></textarea>
       <p class="notehint" id="rdnotehint">Saved to the file's description in Drive.</p>
       <button id="rdnotesave">Save</button>
+      <div class="shlabel" id="rdhllabel" hidden>Highlights</div>
+      <div id="rdhllist"></div>
     </aside>
+  </div>
+  <div id="rdhltools" hidden aria-label="Highlight">
+    <button class="hlcolor" data-color="#ffd54a" style="background:#ffd54a" aria-label="Highlight yellow"></button>
+    <button class="hlcolor" data-color="#a5d6a7" style="background:#a5d6a7" aria-label="Highlight green"></button>
+    <button class="hlcolor" data-color="#90caf9" style="background:#90caf9" aria-label="Highlight blue"></button>
+    <button class="hlcolor" data-color="#f48fb1" style="background:#f48fb1" aria-label="Highlight pink"></button>
   </div>
 </div>
 
@@ -974,10 +1021,10 @@ let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               alertStats: {}, alertSort: 'pending',
               filing: null, processedPapers: [], rejectedPapers: [],
               readingPapers: [], readStates: new Set(['unread', 'reading', 'read']),
-              searchScope: 'view', corpus: null, undoStack: [] };
+              searchScope: 'view', corpus: null, annotations: [], undoStack: [] };
 
 // Capabilities this page expects the server to have.
-const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf', 'reading', 'corpus'];
+const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf', 'reading', 'corpus', 'annotations'];
 
 // A tiny IndexedDB key/value store for the recall corpus, which can outgrow
 // localStorage's ~5 MB. Best-effort: if IndexedDB is unavailable or errors, the
@@ -1570,6 +1617,7 @@ function searchHaystack(p) {
     p.abstract,
     p.doi,
     p.note,
+    (p.annotations || []).map(a => `${a.quote || ''} ${a.comment || ''}`).join(' '),
   ].filter(Boolean).join(' \u0000 '));
 }
 
@@ -2872,6 +2920,15 @@ async function openReader(paper) {
   updateFullBtn();
   markReading(paper);
 
+  // Highlights load before the pages render, so each page paints them on first
+  // draw. Fetch fresh (a card's copy may be stale or absent depending on view).
+  state.annotations = [];
+  try {
+    const r = await api(`/api/papers/${encodeURIComponent(paper.key)}/annotations`);
+    state.annotations = r.annotations || [];
+  } catch (e) { /* highlights just won't show */ }
+  renderHighlightList();
+
   try {
     const lib = await loadPdfjs();
     const url = `/api/papers/${encodeURIComponent(paper.key)}/pdf`;
@@ -2928,7 +2985,7 @@ async function layoutPages() {
 
   keepObs = new IntersectionObserver(entries => {
     for (const e of entries) {
-      if (!e.isIntersecting && e.target.tagName === 'CANVAS') {
+      if (!e.isIntersecting && e.target.classList.contains('rdpagewrap')) {
         keepObs.unobserve(e.target);
         evictPage(e.target, w, h);
       }
@@ -2947,41 +3004,208 @@ async function renderPage(placeholder, scale) {
   try {
     const page = await readerDoc.getPage(n);
     const viewport = page.getViewport({scale});
+    const vw = Math.floor(viewport.width), vh = Math.floor(viewport.height);
+
     const canvas = document.createElement('canvas');
-    canvas.dataset.page = n;
     // Match the device pixel ratio or text is soft on a high-DPI tablet.
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     canvas.width = Math.floor(viewport.width * dpr);
     canvas.height = Math.floor(viewport.height * dpr);
-    canvas.style.width = `${Math.floor(viewport.width)}px`;
-    canvas.style.height = `${Math.floor(viewport.height)}px`;
+    canvas.style.width = `${vw}px`;
+    canvas.style.height = `${vh}px`;
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
     await page.render({canvasContext: ctx, viewport}).promise;
+
     // The reader may have closed or re-laid-out while we awaited; only swap in
-    // the canvas if this placeholder is still on the page.
+    // if this placeholder is still on the page.
     if (!placeholder.isConnected) return;
-    placeholder.replaceWith(canvas);
-    keepObs?.observe(canvas);
+
+    // A wrapper carries the canvas, the highlight overlay, and the text layer.
+    const wrap = document.createElement('div');
+    wrap.className = 'rdpagewrap';
+    wrap.dataset.page = n;
+    wrap.style.width = `${vw}px`;
+    wrap.style.height = `${vh}px`;
+    wrap.appendChild(canvas);
+
+    const hlEl = document.createElement('div');
+    hlEl.className = 'rdhl';
+    wrap.appendChild(hlEl);
+    paintPageHighlights(hlEl, n);
+
+    const textEl = document.createElement('div');
+    textEl.className = 'rdtext';
+    textEl.style.setProperty('--scale-factor', scale);
+    wrap.appendChild(textEl);
+
+    placeholder.replaceWith(wrap);
+    keepObs?.observe(wrap);
+
+    // Text layer after the swap, so the page shows immediately and selection
+    // fills in a beat later. Failure here just means no selection on this page.
+    try {
+      const tc = await page.getTextContent();
+      if (wrap.isConnected) {
+        await new pdfjs.TextLayer({textContentSource: tc, container: textEl, viewport}).render();
+      }
+    } catch (e) { /* selection unavailable on this page */ }
   } catch (e) {
     placeholder.textContent = `page ${n} failed`;
   }
 }
 
-// Swap a far-away canvas back for a placeholder and drop its backing store, so
-// the tablet reclaims the memory now rather than whenever GC gets to it.
-function evictPage(canvas, w, h) {
-  const div = placeholderEl(Number(canvas.dataset.page), w, h);
-  canvas.replaceWith(div);
-  canvas.width = canvas.height = 0;
+// Swap a far-away page back for a placeholder and drop the canvas backing
+// store (and the text-layer DOM), so the tablet reclaims the memory now rather
+// than whenever GC gets to it. Highlights re-paint from state when it re-renders.
+function evictPage(wrap, w, h) {
+  const div = placeholderEl(Number(wrap.dataset.page), w, h);
+  wrap.replaceWith(div);
+  const canvas = wrap.querySelector('canvas');
+  if (canvas) canvas.width = canvas.height = 0;
   renderObs?.observe(div);
 }
+
+// ---------- highlights ----------
+
+function paintPageHighlights(hlEl, page) {
+  hlEl.replaceChildren();
+  for (const a of state.annotations) {
+    if (a.page !== page) continue;
+    for (const [x, y, w, h] of a.rects || []) {
+      const r = document.createElement('div');
+      r.className = 'rdhlrect';
+      r.style.cssText =
+        `left:${x * 100}%;top:${y * 100}%;width:${w * 100}%;height:${h * 100}%;background:${a.color}`;
+      hlEl.appendChild(r);
+    }
+  }
+}
+
+function repaintHighlights() {
+  for (const wrap of $('#rddoc').querySelectorAll('.rdpagewrap')) {
+    const hl = wrap.querySelector('.rdhl');
+    if (hl) paintPageHighlights(hl, Number(wrap.dataset.page));
+  }
+}
+
+// Which rendered page a viewport point falls in.
+function pageWrapAt(x, y) {
+  for (const wrap of $('#rddoc').querySelectorAll('.rdpagewrap')) {
+    const b = wrap.getBoundingClientRect();
+    if (x >= b.left && x <= b.right && y >= b.top && y <= b.bottom) return wrap;
+  }
+  return null;
+}
+
+async function saveAnnotations() {
+  const paper = state.readerPaper;
+  if (!paper) return;
+  try {
+    await api(`/api/papers/${encodeURIComponent(paper.key)}/annotations`, {
+      method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({annotations: state.annotations})
+    });
+  } catch (e) { showError(`Could not save highlights: ${e.message}`); }
+}
+
+function createHighlight(color) {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+  const range = sel.getRangeAt(0);
+  const quote = sel.toString().trim();
+  // Rects can span pages; group them by the page they fall in and make one
+  // highlight per page. Coordinates are normalized 0..1 to the page box, so
+  // they survive zoom and re-render.
+  const byPage = new Map();
+  for (const cr of range.getClientRects()) {
+    if (cr.width < 1 || cr.height < 1) continue;
+    const wrap = pageWrapAt(cr.left + cr.width / 2, cr.top + cr.height / 2);
+    if (!wrap) continue;
+    const box = wrap.getBoundingClientRect();
+    (byPage.get(wrap) || byPage.set(wrap, []).get(wrap)).push([
+      (cr.left - box.left) / box.width,
+      (cr.top - box.top) / box.height,
+      cr.width / box.width,
+      cr.height / box.height,
+    ]);
+  }
+  if (!byPage.size) return;
+  for (const [wrap, rects] of byPage) {
+    state.annotations.push({
+      id: 'h' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      page: Number(wrap.dataset.page),
+      rects, color, quote,
+    });
+  }
+  sel.removeAllRanges();
+  $('#rdhltools').hidden = true;
+  saveAnnotations();
+  repaintHighlights();
+  renderHighlightList();
+}
+
+function deleteHighlight(id) {
+  state.annotations = state.annotations.filter(a => a.id !== id);
+  saveAnnotations();
+  repaintHighlights();
+  renderHighlightList();
+}
+
+function renderHighlightList() {
+  const list = $('#rdhllist');
+  $('#rdhllabel').hidden = state.annotations.length === 0;
+  list.replaceChildren(...state.annotations.map(a => {
+    const row = document.createElement('div');
+    row.className = 'hlitem';
+    row.innerHTML =
+      `<span class="hldot" style="background:${a.color}"></span>` +
+      `<span class="hlquote">${esc(a.quote || '(no text)')}</span>` +
+      `<button class="hldel" aria-label="Delete highlight">${icon('trash-2')}</button>`;
+    row.querySelector('.hlquote').addEventListener('click', () => {
+      const wrap = [...$('#rddoc').querySelectorAll('.rdpagewrap')]
+        .find(x => Number(x.dataset.page) === a.page);
+      wrap?.scrollIntoView({block: 'center'});
+    });
+    row.querySelector('.hldel').addEventListener('click', () => deleteHighlight(a.id));
+    return row;
+  }));
+}
+
+// The colour picker follows the text selection inside the reader.
+let hlToolTimer = null;
+function scheduleHlTools() {
+  clearTimeout(hlToolTimer);
+  hlToolTimer = setTimeout(updateHlTools, 150);
+}
+function updateHlTools() {
+  const tools = $('#rdhltools');
+  const sel = window.getSelection();
+  if ($('#reader').hidden || !sel || sel.isCollapsed || !sel.rangeCount) {
+    tools.hidden = true; return;
+  }
+  const range = sel.getRangeAt(0);
+  if (!$('#rddoc').contains(range.commonAncestorContainer)) { tools.hidden = true; return; }
+  const rect = range.getBoundingClientRect();
+  if (!rect.width) { tools.hidden = true; return; }
+  tools.hidden = false;
+  const t = tools.getBoundingClientRect();
+  tools.style.top = `${Math.max(4, rect.top - t.height - 8)}px`;
+  tools.style.left =
+    `${Math.max(4, Math.min(window.innerWidth - t.width - 4, rect.left + rect.width / 2 - t.width / 2))}px`;
+}
+
+document.addEventListener('selectionchange', scheduleHlTools);
+for (const b of document.querySelectorAll('#rdhltools .hlcolor'))
+  b.addEventListener('click', () => createHighlight(b.dataset.color));
 
 function closeReader() {
   // Leave full screen with the reader, or the empty view stays full-screen.
   const fs = document.fullscreenElement || document.webkitFullscreenElement;
   if (fs === $('#reader')) (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
   $('#reader').classList.remove('rdmax');
+  $('#rdhltools').hidden = true;
+  state.annotations = [];
   $('#reader').hidden = true;
   renderObs?.disconnect(); renderObs = null;
   keepObs?.disconnect(); keepObs = null;

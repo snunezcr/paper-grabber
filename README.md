@@ -42,6 +42,9 @@ metadata APIs it queries and the Drive folder you pick.
 - **Uploads to Drive** and deletes the local copy only after Drive confirms a
   matching size and MD5.
 - **Notes** written while filing become the file's description in Drive.
+- **Highlighting** in the reader: select text to highlight it; highlights are
+  stored per paper, their quotes join Library recall, and they mirror onto the
+  Drive file's metadata (appProperties) so they travel with it.
 
 ## Requirements
 
@@ -147,7 +150,7 @@ anything that matters:
 ## Development
 
 ```bash
-pytest                       # 765 tests, no network required
+pytest                       # 771 tests, no network required
 ./scripts/demo.sh            # drive the pipeline against bundled fixtures
 ```
 

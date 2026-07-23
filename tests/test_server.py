@@ -1996,7 +1996,7 @@ def test_corpus_endpoint_returns_every_kept_paper_with_notes(seeded):
 def test_library_recall_search(client):
     body = client.get("/").text
     # Notes are in the search haystack now.
-    assert "p.doi,\n    p.note,\n  ].filter(Boolean)" in body
+    assert "p.doi,\n    p.note,\n" in body   # notes (and, below, highlight quotes) are searched
     # A scope toggle, a corpus loader cached in IndexedDB, and a recall view.
     assert 'data-scope="library"' in body
     assert "async function loadCorpus" in body
@@ -2051,3 +2051,19 @@ def test_annotations_mirror_to_drive_when_uploaded(seeded):
 def test_annotations_404_for_unknown_paper(seeded):
     c = TestClient(create_app(seeded))
     assert c.put("/api/papers/nope/annotations", json={"annotations": []}).status_code == 404
+
+
+def test_reader_has_highlighting(client):
+    body = client.get("/").text
+    # Text layer for selection, on top of the canvas in a per-page wrapper.
+    assert "class TextLayer" not in body            # not inlined; it's in vendor
+    assert "new pdfjs.TextLayer({textContentSource: tc, container: textEl, viewport})" in body
+    assert "wrap.className = 'rdpagewrap';" in body
+    assert ".rdtext span, .rdtext br" in body
+    # Selection -> colour picker -> normalized-rect highlight, saved to the API.
+    assert "function createHighlight" in body
+    assert 'id="rdhltools"' in body
+    assert "function paintPageHighlights" in body
+    assert "/annotations`" in body
+    # Highlight quotes feed recall.
+    assert "(p.annotations || []).map(a => `${a.quote || ''} ${a.comment || ''}`)" in body
