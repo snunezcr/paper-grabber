@@ -230,6 +230,11 @@
     position: relative;
     background: var(--card); border: 1px solid var(--line); border-radius: 12px;
     padding: 1rem; margin-bottom: 1rem;
+    /* Skip laying out and painting cards that are off-screen -- with a few
+       hundred in a list, this is most of them. The intrinsic size keeps the
+       scrollbar honest; `auto` remembers each card's real height once seen. */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 280px;
   }
   .card.going { opacity: .35; transform: scale(.99); transition: opacity .18s, transform .18s; }
 
@@ -1080,15 +1085,36 @@ function cardBody(p) {
     <div class="tags">${tags.join('')}</div>`;
 }
 
+// Deciding whether an abstract needs a "Show more" means reading scrollHeight,
+// which forces a layout. Doing that for every card at render time stalled long
+// lists on load; content-visibility also skips off-screen layout, so the
+// measurement can't run then anyway. So measure lazily -- once, as each card
+// nears the viewport. reset() clears the previous list's observations so a
+// re-render (every search keystroke) doesn't leak detached cards.
+let cardObs = null;
+function ensureCardObs() {
+  if (cardObs) return cardObs;
+  cardObs = new IntersectionObserver(entries => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      const abs = e.target.querySelector('.abstract');
+      const more = e.target.querySelector('.more');
+      if (abs && more && abs.scrollHeight > abs.clientHeight + 4) more.hidden = false;
+      cardObs.unobserve(e.target);
+    }
+  }, {rootMargin: '400px'});
+  return cardObs;
+}
+function resetCardObs() { cardObs?.disconnect(); }
+
 function wireAbstract(el) {
-  const abs = el.querySelector('.abstract'), more = el.querySelector('.more');
-  requestAnimationFrame(() => {
-    if (abs.scrollHeight > abs.clientHeight + 4) more.hidden = false;
-  });
+  const more = el.querySelector('.more');
   more.addEventListener('click', () => {
+    const abs = el.querySelector('.abstract');
     abs.classList.toggle('clamped');
     more.textContent = abs.classList.contains('clamped') ? 'Show more' : 'Show less';
   });
+  ensureCardObs().observe(el);
 }
 
 function triageCard(p) {
@@ -1541,6 +1567,7 @@ function setListEmpty(sel, shown, raw, emptyMsg) {
 }
 
 function renderTriage() {
+  resetCardObs();
   renderAlertFilter();
   const shown = visiblePending();
   $('#list').replaceChildren(...shown.map(triageCard));
@@ -2001,6 +2028,7 @@ async function loadRejected() {
 }
 
 function renderRejected() {
+  resetCardObs();
   renderAlertFilter();
   const raw = state.rejectedPapers || [];
   const shown = passesFilters(raw);
@@ -2019,6 +2047,7 @@ async function loadProcessed() {
 }
 
 function renderProcessed() {
+  resetCardObs();
   renderAlertFilter();
   const raw = state.processedPapers || [];
   const shown = passesFilters(raw);
@@ -2127,6 +2156,7 @@ function renderReadStateFilter() {
 }
 
 function renderReading() {
+  resetCardObs();
   renderAlertFilter();
   renderReadStateFilter();
   const raw = state.readingPapers || [];
@@ -2263,6 +2293,7 @@ async function loadFiling() {
 }
 
 function renderFiling() {
+  resetCardObs();
   renderAlertFilter();
   const data = state.filing || {unfiled: [], filed: []};
   const unfiled = passesFilters(data.unfiled);

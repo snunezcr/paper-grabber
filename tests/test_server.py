@@ -1942,3 +1942,15 @@ def test_reader_has_a_fullscreen_toggle(client):
     assert "#reader:fullscreen, #reader:-webkit-full-screen, #reader.rdmax" in body
     # Closing the reader leaves fullscreen too.
     assert "(document.exitFullscreen || document.webkitExitFullscreen)?.call(document);" in body
+
+
+def test_long_card_lists_are_virtualized(client):
+    body = client.get("/").text
+    # Off-screen cards skip layout and paint.
+    assert "content-visibility: auto;" in body
+    assert "contain-intrinsic-size: auto 280px;" in body
+    # Abstract measurement is lazy (once, near the viewport), not a forced
+    # synchronous layout for every card at render time.
+    assert "function ensureCardObs" in body
+    assert body.count("resetCardObs();") >= 5   # one per list render
+    assert "more = el.querySelector('.more');\n  requestAnimationFrame" not in body
