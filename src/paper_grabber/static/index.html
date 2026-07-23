@@ -531,7 +531,7 @@
   #reader.mode-erase #rddoc { cursor: none; }
   /* The area eraser's cursor: a circle the size of its reach, following the pen. */
   #rderaser {
-    position: fixed; z-index: 22; width: 28px; height: 28px; margin: -14px 0 0 -14px;
+    position: fixed; z-index: 22; width: 20px; height: 20px; margin: -10px 0 0 -10px;
     border: 2px solid var(--reject); border-radius: 50%;
     background: rgba(200,40,40,.12); pointer-events: none;
   }
@@ -3467,22 +3467,49 @@ $('#rddoc').addEventListener('pointercancel', endPan);
 // Sweep the pen (or mouse) over strokes to remove them -- a circular eraser,
 // whole-stroke on contact, not a per-line tap.
 let erasing = null;
-const ERASE_R = 14;   // eraser radius, px
+const ERASE_R = 10;   // eraser radius, px (half the area of the first version)
+
+// Distance from a point to a line segment -- so sweeping across a stroke's line
+// erases it even where the eraser lands between two stored points.
+function distToSeg(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1, len2 = dx * dx + dy * dy;
+  let t = len2 ? ((px - x1) * dx + (py - y1) * dy) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const ex = px - (x1 + t * dx), ey = py - (y1 + t * dy);
+  return Math.hypot(ex, ey);
+}
+
+function eraseHit(ex, ey, page, box) {
+  const before = state.annotations.length;
+  state.annotations = state.annotations.filter(a => {
+    if (a.type !== 'ink' || a.page !== page) return true;
+    const p = a.points;
+    if (p.length === 1) {
+      return Math.hypot(p[0][0] * box.width - ex, p[0][1] * box.height - ey) >= ERASE_R;
+    }
+    for (let i = 0; i < p.length - 1; i++) {
+      if (distToSeg(ex, ey, p[i][0] * box.width, p[i][1] * box.height,
+                    p[i + 1][0] * box.width, p[i + 1][1] * box.height) < ERASE_R) return false;
+    }
+    return true;
+  });
+  return state.annotations.length !== before;
+}
 
 function eraseAt(e) {
   if (!erasing) return;
   const box = erasing.box, page = erasing.page;
-  const before = state.annotations.length;
-  state.annotations = state.annotations.filter(a => {
-    if (a.type !== 'ink' || a.page !== page) return true;
-    const hit = a.points.some(([x, y]) => {
-      const dx = x * box.width - (e.clientX - box.left);
-      const dy = y * box.height - (e.clientY - box.top);
-      return dx * dx + dy * dy < ERASE_R * ERASE_R;
-    });
-    return !hit;
-  });
-  if (state.annotations.length !== before) {
+  const cx = e.clientX - box.left, cy = e.clientY - box.top;
+  const prev = erasing.prev || [cx, cy];
+  // Step along the eraser's travel so a fast sweep can't jump over a stroke.
+  const steps = Math.max(1, Math.ceil(Math.hypot(cx - prev[0], cy - prev[1]) / (ERASE_R / 2)));
+  let changed = false;
+  for (let s = 1; s <= steps; s++) {
+    const t = s / steps;
+    if (eraseHit(prev[0] + (cx - prev[0]) * t, prev[1] + (cy - prev[1]) * t, page, box)) changed = true;
+  }
+  erasing.prev = [cx, cy];
+  if (changed) {
     erasing.changed = true;
     repaintAnnotations();
     renderAnnotationList();
