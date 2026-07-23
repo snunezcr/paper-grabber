@@ -2066,7 +2066,8 @@ searchInput.addEventListener('keydown', e => {
 let pdfjs = null;
 let readerDoc = null;         // the loaded PDFDocumentProxy
 let readerScale = null;       // null means fit-width
-let readerObserver = null;
+let renderObs = null;         // renders a page as it nears the viewport
+let keepObs = null;           // releases a rendered page once it is far away
 
 async function loadPdfjs() {
   if (pdfjs) return pdfjs;
@@ -2100,40 +2101,62 @@ async function openReader(paper) {
   }
 }
 
+function placeholderEl(n, w, h) {
+  const div = document.createElement('div');
+  div.className = 'rdpage';
+  div.dataset.page = n;
+  div.style.width = `${w}px`;
+  div.style.height = `${h}px`;
+  return div;
+}
+
 // Pages are laid out as empty placeholders at the right aspect ratio and
-// rendered only as they approach the viewport. Rendering a 300-page thesis
-// up front would lock the tablet for several seconds.
+// rendered only as they approach the viewport -- rendering a 300-page thesis
+// up front would lock the tablet for seconds. A rendered page is also released
+// back to a placeholder once it drifts well past the viewport, so memory
+// tracks the window on screen rather than the length of the document: a
+// 400-page PDF read end to end stays a handful of live canvases, not four
+// hundred. The render and keep margins differ so a page hovering at the
+// boundary does not thrash between the two states.
 async function layoutPages() {
   const doc = readerDoc;
   const wrap = $('#rddoc');
   wrap.replaceChildren();
-  if (readerObserver) readerObserver.disconnect();
+  renderObs?.disconnect();
+  keepObs?.disconnect();
 
   const first = await doc.getPage(1);
   const natural = first.getViewport({scale: 1});
   const available = wrap.clientWidth - 24;
   const scale = readerScale || (available / natural.width);
+  const w = Math.floor(natural.width * scale);
+  const h = Math.floor(natural.height * scale);
 
-  const placeholders = [];
-  for (let n = 1; n <= doc.numPages; n++) {
-    const div = document.createElement('div');
-    div.className = 'rdpage';
-    div.dataset.page = n;
-    div.style.width = `${Math.floor(natural.width * scale)}px`;
-    div.style.height = `${Math.floor(natural.height * scale)}px`;
-    wrap.appendChild(div);
-    placeholders.push(div);
-  }
-
-  readerObserver = new IntersectionObserver(entries => {
-    for (const entry of entries) {
-      if (entry.isIntersecting) {
-        renderPage(entry.target, scale);
-        readerObserver.unobserve(entry.target);
+  renderObs = new IntersectionObserver(entries => {
+    for (const e of entries) {
+      // Unobserve first: rendering is async, and a second intersection tick
+      // for the same placeholder would otherwise render it twice.
+      if (e.isIntersecting && e.target.classList.contains('rdpage')) {
+        renderObs.unobserve(e.target);
+        renderPage(e.target, scale);
       }
     }
-  }, {root: wrap, rootMargin: '300px'});
-  placeholders.forEach(el => readerObserver.observe(el));
+  }, {root: wrap, rootMargin: '600px'});
+
+  keepObs = new IntersectionObserver(entries => {
+    for (const e of entries) {
+      if (!e.isIntersecting && e.target.tagName === 'CANVAS') {
+        keepObs.unobserve(e.target);
+        evictPage(e.target, w, h);
+      }
+    }
+  }, {root: wrap, rootMargin: '1500px'});
+
+  for (let n = 1; n <= doc.numPages; n++) {
+    const div = placeholderEl(n, w, h);
+    wrap.appendChild(div);
+    renderObs.observe(div);
+  }
 }
 
 async function renderPage(placeholder, scale) {
@@ -2142,6 +2165,7 @@ async function renderPage(placeholder, scale) {
     const page = await readerDoc.getPage(n);
     const viewport = page.getViewport({scale});
     const canvas = document.createElement('canvas');
+    canvas.dataset.page = n;
     // Match the device pixel ratio or text is soft on a high-DPI tablet.
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     canvas.width = Math.floor(viewport.width * dpr);
@@ -2151,15 +2175,29 @@ async function renderPage(placeholder, scale) {
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
     await page.render({canvasContext: ctx, viewport}).promise;
+    // The reader may have closed or re-laid-out while we awaited; only swap in
+    // the canvas if this placeholder is still on the page.
+    if (!placeholder.isConnected) return;
     placeholder.replaceWith(canvas);
+    keepObs?.observe(canvas);
   } catch (e) {
     placeholder.textContent = `page ${n} failed`;
   }
 }
 
+// Swap a far-away canvas back for a placeholder and drop its backing store, so
+// the tablet reclaims the memory now rather than whenever GC gets to it.
+function evictPage(canvas, w, h) {
+  const div = placeholderEl(Number(canvas.dataset.page), w, h);
+  canvas.replaceWith(div);
+  canvas.width = canvas.height = 0;
+  renderObs?.observe(div);
+}
+
 function closeReader() {
   $('#reader').hidden = true;
-  if (readerObserver) { readerObserver.disconnect(); readerObserver = null; }
+  renderObs?.disconnect(); renderObs = null;
+  keepObs?.disconnect(); keepObs = null;
   if (readerDoc) { readerDoc.destroy(); readerDoc = null; }
   $('#rddoc').replaceChildren();
   state.readerPaper = null;

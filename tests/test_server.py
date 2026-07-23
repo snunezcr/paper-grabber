@@ -1247,6 +1247,18 @@ def test_public_bind_is_refused_without_the_flag():
 # --- in-app reader ------------------------------------------------------------
 
 
+def test_reader_virtualizes_pages_with_eviction(client):
+    # Canvas rendering only runs in a browser, so guard the wiring: pages are
+    # rendered near the viewport and released once far, keeping a long PDF's
+    # memory bounded to the window on screen rather than its page count.
+    body = client.get("/").text
+    assert "renderObs = new IntersectionObserver" in body
+    assert "keepObs = new IntersectionObserver" in body
+    assert "function evictPage" in body
+    # A released canvas hands its bytes back immediately.
+    assert "canvas.width = canvas.height = 0;" in body
+
+
 PDF_BYTES = b"%PDF-1.7\nreader test\n"
 
 
