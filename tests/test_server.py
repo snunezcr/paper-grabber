@@ -1954,3 +1954,13 @@ def test_long_card_lists_are_virtualized(client):
     assert "function ensureCardObs" in body
     assert body.count("resetCardObs();") >= 5   # one per list render
     assert "more = el.querySelector('.more');\n  requestAnimationFrame" not in body
+
+
+def test_filing_loads_fast_and_caches(client):
+    body = client.get("/").text
+    # Suggestions (a live Drive call) no longer block the Filing render...
+    assert "loadSuggestions().then(() => { if (state.tab === 'filing') renderFiling(); });" in body
+    # ...and the list paints from a browser snapshot before revalidating.
+    assert "const FILING_CACHE_KEY = 'rs.filing.v1';" in body
+    assert "if (!state.filing) state.filing = readFilingCache();" in body
+    assert "writeFilingCache(data);" in body

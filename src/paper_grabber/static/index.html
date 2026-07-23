@@ -2279,16 +2279,43 @@ $('#localfile').addEventListener('change', async () => {
   }
 });
 
+function setBaseFolderLabel(base) {
+  $('#basefolder').textContent = base?.folder_name
+    ? `Base folder: ${base.folder_name}` : 'No base folder set';
+}
+
+// A last-session snapshot of the Filing data, so the tab paints instantly on a
+// cold start instead of waiting on the network. localStorage, not cookies:
+// cookies are tiny and ride on every request; this is a private JSON blob read
+// only here. Best-effort throughout -- a disabled or full store just means no
+// cache, never an error.
+const FILING_CACHE_KEY = 'rs.filing.v1';
+function readFilingCache() {
+  try { return JSON.parse(localStorage.getItem(FILING_CACHE_KEY)); } catch (e) { return null; }
+}
+function writeFilingCache(data) {
+  try { localStorage.setItem(FILING_CACHE_KEY, JSON.stringify(data)); } catch (e) {}
+}
+
 async function loadFiling() {
+  // Paint at once from what we already hold -- this session's data, or last
+  // session's from the browser -- then revalidate in the background.
+  if (!state.filing) state.filing = readFilingCache();
+  if (state.filing) {
+    state.base = state.filing.base;
+    setBaseFolderLabel(state.filing.base);
+    renderFiling();
+  }
   try {
-    await loadSuggestions();
     const data = await api('/api/accepted');
     state.filing = data;
     state.base = data.base;
-    $('#basefolder').textContent = data.base.folder_name
-      ? `Base folder: ${data.base.folder_name}`
-      : 'No base folder set';
+    setBaseFolderLabel(data.base);
     renderFiling();
+    writeFilingCache(data);
+    // Suggestions call out to Google Drive, so they must never block the list.
+    // Fetch them after the render and repaint the chips when they arrive.
+    loadSuggestions().then(() => { if (state.tab === 'filing') renderFiling(); });
   } catch (e) { showError(`Could not load accepted papers: ${e.message}`); }
 }
 
