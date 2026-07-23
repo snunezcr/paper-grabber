@@ -1962,5 +1962,16 @@ def test_filing_loads_fast_and_caches(client):
     assert "loadSuggestions().then(() => { if (state.tab === 'filing') renderFiling(); });" in body
     # ...and the list paints from a browser snapshot before revalidating.
     assert "const FILING_CACHE_KEY = 'rs.filing.v1';" in body
-    assert "if (!state.filing) state.filing = readFilingCache();" in body
-    assert "writeFilingCache(data);" in body
+    assert "if (!state.filing) state.filing = readCache(FILING_CACHE_KEY);" in body
+    assert "writeCache(FILING_CACHE_KEY, data);" in body
+
+
+def test_reading_and_stored_paint_from_cache(client):
+    body = client.get("/").text
+    # Same stale-while-revalidate for the Reading and Stored lists.
+    assert "const READING_CACHE_KEY = 'rs.reading.v1';" in body
+    assert "const PROCESSED_CACHE_KEY = 'rs.processed.v1';" in body
+    assert "const cached = readCache(READING_CACHE_KEY);" in body
+    assert "writeCache(READING_CACHE_KEY, data.papers);" in body
+    assert "const cached = readCache(PROCESSED_CACHE_KEY);" in body
+    assert "writeCache(PROCESSED_CACHE_KEY, data.papers);" in body

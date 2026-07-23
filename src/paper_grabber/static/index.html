@@ -2038,11 +2038,18 @@ function renderRejected() {
 }
 
 async function loadProcessed() {
+  // Paint at once from memory or the browser cache, then revalidate.
+  if (!state.processedPapers.length) {
+    const cached = readCache(PROCESSED_CACHE_KEY);
+    if (cached) state.processedPapers = cached;
+  }
+  if (state.processedPapers.length) renderProcessed();
   try {
     const data = await api('/api/processed');
     showCounts(data.counts);
     state.processedPapers = data.papers;
     renderProcessed();
+    writeCache(PROCESSED_CACHE_KEY, data.papers);
   } catch (e) { showError(`Could not load stored papers: ${e.message}`); }
 }
 
@@ -2129,11 +2136,18 @@ async function togglePin(paper, card) {
 }
 
 async function loadReading() {
+  // Paint at once from memory or the browser cache, then revalidate.
+  if (!state.readingPapers.length) {
+    const cached = readCache(READING_CACHE_KEY);
+    if (cached) state.readingPapers = cached;
+  }
+  if (state.readingPapers.length) renderReading();
   try {
     const data = await api('/api/reading');
     showCounts(data.counts);
     state.readingPapers = data.papers;
     renderReading();
+    writeCache(READING_CACHE_KEY, data.papers);
   } catch (e) { showError(`Could not load the reading list: ${e.message}`); }
 }
 
@@ -2284,23 +2298,24 @@ function setBaseFolderLabel(base) {
     ? `Base folder: ${base.folder_name}` : 'No base folder set';
 }
 
-// A last-session snapshot of the Filing data, so the tab paints instantly on a
-// cold start instead of waiting on the network. localStorage, not cookies:
-// cookies are tiny and ride on every request; this is a private JSON blob read
-// only here. Best-effort throughout -- a disabled or full store just means no
-// cache, never an error.
+// Last-session snapshots, so a tab paints instantly on a cold start instead of
+// waiting on the network. localStorage, not cookies: cookies are tiny and ride
+// on every request; these are private JSON blobs read only here. Best-effort
+// throughout -- a disabled or full store just means no cache, never an error.
 const FILING_CACHE_KEY = 'rs.filing.v1';
-function readFilingCache() {
-  try { return JSON.parse(localStorage.getItem(FILING_CACHE_KEY)); } catch (e) { return null; }
+const READING_CACHE_KEY = 'rs.reading.v1';
+const PROCESSED_CACHE_KEY = 'rs.processed.v1';
+function readCache(key) {
+  try { return JSON.parse(localStorage.getItem(key)); } catch (e) { return null; }
 }
-function writeFilingCache(data) {
-  try { localStorage.setItem(FILING_CACHE_KEY, JSON.stringify(data)); } catch (e) {}
+function writeCache(key, data) {
+  try { localStorage.setItem(key, JSON.stringify(data)); } catch (e) {}
 }
 
 async function loadFiling() {
   // Paint at once from what we already hold -- this session's data, or last
   // session's from the browser -- then revalidate in the background.
-  if (!state.filing) state.filing = readFilingCache();
+  if (!state.filing) state.filing = readCache(FILING_CACHE_KEY);
   if (state.filing) {
     state.base = state.filing.base;
     setBaseFolderLabel(state.filing.base);
@@ -2312,7 +2327,7 @@ async function loadFiling() {
     state.base = data.base;
     setBaseFolderLabel(data.base);
     renderFiling();
-    writeFilingCache(data);
+    writeCache(FILING_CACHE_KEY, data);
     // Suggestions call out to Google Drive, so they must never block the list.
     // Fetch them after the render and repaint the chips when they arrive.
     loadSuggestions().then(() => { if (state.tab === 'filing') renderFiling(); });
