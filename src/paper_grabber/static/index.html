@@ -361,19 +361,24 @@
 
   /* Reading list */
   .read-actions { margin-top: .5rem; align-items: center; flex-wrap: wrap; }
+  /* The row carries the .actions class, so undo its "stretch every button to
+     fill the width" rule -- these are compact icon buttons, like Filing's. */
+  .read-actions button { flex: 0 0 auto; min-height: 44px; font-size: .9rem; }
+  .read-actions .iconbtn { min-width: 44px; padding: 0; }
   /* The reading-state control: unread is quiet, reading takes the accent,
      read the affirmative green -- state legible at a glance, not just by label. */
   .readstate {
-    flex: 0 0 auto; min-height: 44px; padding: 0 .8rem; cursor: pointer;
+    padding: 0 .8rem; cursor: pointer;
     border-radius: 10px; border: 1px solid var(--line); background: none;
-    font-size: .85rem; font-weight: 600; color: var(--muted);
+    font-weight: 600; color: var(--muted);
   }
   .readstate.reading { color: var(--accent); border-color: var(--accent); }
   .readstate.read { color: var(--accept); border-color: var(--accept); }
+  /* Filing status shows as a quiet icon (label in its tooltip), not text. */
   .read-actions .filingchip {
-    flex: 0 0 auto; font-size: .8rem; color: var(--muted);
-    display: inline-flex; align-items: center; min-height: 44px;
-    overflow-wrap: anywhere;
+    flex: 0 0 auto; color: var(--muted);
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 32px; min-height: 44px;
   }
   .read-actions .pin.pinned { color: var(--accent); border-color: var(--accent); }
   .read-actions .note.has-note { border-color: var(--accent); color: var(--accent); }
@@ -1999,11 +2004,12 @@ const READ_LABEL = {unread: 'Unread', reading: 'Reading', read: 'Read'};
 const NEXT_READ = {unread: 'reading', reading: 'read', read: 'unread'};
 
 // Where a paper stands on the filing axis, shown while reading so you can see
-// what still needs archiving without leaving for the Filing tab.
+// what still needs archiving without leaving for the Filing tab. An icon, not
+// text -- the full state lives in its tooltip. Nothing shows when it's unfiled.
 function filingChip(p) {
-  if (p.uploaded) return 'in Drive';
-  if (p.dest_folder_name) return `filed → ${esc(p.dest_folder_name)}`;
-  return 'not filed';
+  if (p.uploaded) return {icon: 'cloud-upload', tip: 'In Drive'};
+  if (p.dest_folder_name) return {icon: 'folder-input', tip: `Filed → ${p.dest_folder_name}`};
+  return null;
 }
 
 function readingCard(p) {
@@ -2012,10 +2018,11 @@ function readingCard(p) {
   el.dataset.key = p.key;
   el.innerHTML = cardBody(p) + '<div class="actions read-actions"></div>';
   const actions = el.querySelector('.read-actions');
+  const chip = filingChip(p);
   actions.innerHTML = `
     <button class="readstate ${p.read_state}" data-tip="Advance reading state">${READ_LABEL[p.read_state] || 'Unread'}</button>
     ${hasPdfFile(p) ? iconBtn('read', 'book-open', 'Read with notes') : ''}
-    <span class="filingchip">${filingChip(p)}</span>
+    ${chip ? `<span class="filingchip" data-tip="${esc(chip.tip)}" aria-label="${esc(chip.tip)}">${icon(chip.icon)}</span>` : ''}
     <span class="cardstatus" hidden></span>
     ${iconBtn('pin' + (p.pinned ? ' pinned' : ''), 'bookmark',
               p.pinned ? 'Unpin from the top' : 'Pin to the top', 'style="margin-left:auto"')}
