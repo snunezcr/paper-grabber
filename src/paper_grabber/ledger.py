@@ -71,6 +71,14 @@ ALTER TABLE papers ADD COLUMN uploaded_at REAL;
 ALTER TABLE papers ADD COLUMN note TEXT;
 """
 
+# Reading is a separate axis from filing: a paper can be in Drive but unread,
+# or read but not yet filed. read_state is unread/reading/read (NULL, for rows
+# predating this, is read as unread); pinned floats one to the top of the queue.
+_READING_COLUMNS = """
+ALTER TABLE papers ADD COLUMN read_state TEXT;
+ALTER TABLE papers ADD COLUMN pinned INTEGER;
+"""
+
 SETTING_BASE_FOLDER_ID = "base_folder_id"
 SETTING_BASE_FOLDER_NAME = "base_folder_name"
 
@@ -91,6 +99,8 @@ class LedgerPaper:
     drive_file_id: str | None = None
     uploaded_at: float | None = None
     note: str | None = None
+    read_state: str | None = None
+    pinned: bool = False
 
 
 def _scholar_pdf_url(url: str | None) -> bool:
@@ -158,6 +168,10 @@ def paper_view(p: LedgerPaper) -> dict[str, Any]:
             or _scholar_pdf_url(d.get("url"))
         ),
         "uploaded_at": p.uploaded_at,
+        # The reading axis: unread until you open it, reading once you do, read
+        # when you say so. Pinned floats it to the top of the queue.
+        "read_state": p.read_state or "unread",
+        "pinned": bool(p.pinned),
         # Opens the PDF in Drive, which is where reading and annotation happen.
         "drive_url": (
             f"https://drive.google.com/file/d/{p.drive_file_id}/view"
@@ -183,13 +197,14 @@ class Ledger:
         triaged a hundred papers should not lose them to a schema change.
         """
         have = {r[1] for r in self._db.execute("PRAGMA table_info(papers)")}
-        for statement in _DESTINATION_COLUMNS.strip().split(";"):
-            statement = statement.strip()
-            if not statement:
-                continue
-            column = statement.rsplit(" ", 2)[-2]
-            if column not in have:
-                self._db.execute(statement)
+        for block in (_DESTINATION_COLUMNS, _READING_COLUMNS):
+            for statement in block.strip().split(";"):
+                statement = statement.strip()
+                if not statement:
+                    continue
+                column = statement.rsplit(" ", 2)[-2]
+                if column not in have:
+                    self._db.execute(statement)
 
     # --- processed messages ---------------------------------------------------
 
@@ -366,6 +381,40 @@ class Ledger:
         ).fetchall()
         return [self._row(r) for r in rows]
 
+    def reading(self) -> list[LedgerPaper]:
+        """Every kept paper, across filing states, newest decision first.
+
+        The reading queue spans the whole accepted set -- unfiled, filed, and
+        already in Drive -- because whether a paper is read has nothing to do
+        with whether its PDF has been archived.
+        """
+        rows = self._db.execute(
+            "SELECT key, title, payload, decision, first_seen, decided_at,"
+            " dest_folder_id, dest_folder_name, staged_name, drive_file_id,"
+            " uploaded_at, note, read_state, pinned"
+            " FROM papers WHERE decision = ? ORDER BY decided_at DESC",
+            (Decision.ACCEPTED.value,),
+        ).fetchall()
+        return [self._row(r) for r in rows]
+
+    def set_read_state(self, key: str, state: str) -> bool:
+        """Move a paper along the reading axis: unread, reading, or read."""
+        if state not in ("unread", "reading", "read"):
+            raise ValueError(f"unknown read state: {state}")
+        cur = self._db.execute(
+            "UPDATE papers SET read_state = ? WHERE key = ?", (state, key)
+        )
+        self._db.commit()
+        return cur.rowcount > 0
+
+    def set_pinned(self, key: str, pinned: bool) -> bool:
+        """Pin (or unpin) a paper to the top of the reading queue."""
+        cur = self._db.execute(
+            "UPDATE papers SET pinned = ? WHERE key = ?", (1 if pinned else 0, key)
+        )
+        self._db.commit()
+        return cur.rowcount > 0
+
     # --- fetch and upload progress ---------------------------------------------
 
     def set_staged(self, key: str, staged_name: str | None) -> bool:
@@ -428,7 +477,7 @@ class Ledger:
 
     def get(self, key: str) -> LedgerPaper | None:
         row = self._db.execute(
-            "SELECT key, title, payload, decision, first_seen, decided_at, dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note"
+            "SELECT key, title, payload, decision, first_seen, decided_at, dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note, read_state, pinned"
             " FROM papers WHERE key = ?",
             (key,),
         ).fetchone()
@@ -470,6 +519,13 @@ class Ledger:
         counts["processed"] = self._db.execute(
             "SELECT COUNT(*) FROM papers WHERE drive_file_id IS NOT NULL"
         ).fetchone()[0]
+        # The reading queue's depth: kept papers not yet read (NULL predates the
+        # column and reads as unread).
+        counts["unread"] = self._db.execute(
+            "SELECT COUNT(*) FROM papers WHERE decision = ?"
+            " AND (read_state IS NULL OR read_state = 'unread')",
+            (Decision.ACCEPTED.value,),
+        ).fetchone()[0]
         return counts
 
     def alert_stats(self) -> dict[str, dict[str, int]]:
@@ -509,6 +565,8 @@ class Ledger:
             drive_file_id=r[9] if len(r) > 9 else None,
             uploaded_at=r[10] if len(r) > 10 else None,
             note=r[11] if len(r) > 11 else None,
+            read_state=r[12] if len(r) > 12 else None,
+            pinned=bool(r[13]) if len(r) > 13 else False,
         )
 
     def close(self) -> None:

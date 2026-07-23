@@ -99,9 +99,10 @@ def test_counts_by_decision(ledger):
     ledger.record(paper(title="C"))
     ledger.decide("A", Decision.ACCEPTED)
     ledger.decide("B", Decision.REJECTED)
-    # "filed" and "processed" ride along with the decision counts.
+    # "filed", "processed", and "unread" ride along with the decision counts.
     assert ledger.counts() == {
-        "accepted": 1, "rejected": 1, "pending": 1, "filed": 0, "processed": 0,
+        "accepted": 1, "rejected": 1, "pending": 1,
+        "filed": 0, "processed": 0, "unread": 1,
     }
 
 
@@ -522,3 +523,53 @@ def test_alert_stats_still_counts_accepted_after_upload(ledger):
     ledger.decide("A", Decision.ACCEPTED)
     ledger.set_uploaded(key, "DRIVE1")
     assert ledger.alert_stats()["cs.AI"]["accepted"] == 1
+
+
+# --- reading state ------------------------------------------------------------
+
+
+def test_kept_paper_starts_unread(ledger):
+    ledger.record(paper(title="A", alert_query="cs.AI"))
+    ledger.decide("A", Decision.ACCEPTED)
+    r = ledger.reading()
+    assert len(r) == 1 and (r[0].read_state or "unread") == "unread"
+
+
+def test_read_state_advances_and_counts(ledger):
+    ledger.record(paper(title="A"))
+    key = ledger.pending()[0].key
+    ledger.decide("A", Decision.ACCEPTED)
+    assert ledger.counts()["unread"] == 1
+
+    assert ledger.set_read_state(key, "reading") is True
+    assert ledger.get(key).read_state == "reading"
+    assert ledger.counts()["unread"] == 0          # no longer unread
+
+    ledger.set_read_state(key, "read")
+    assert ledger.get(key).read_state == "read"
+
+
+def test_read_state_rejects_unknown_value(ledger):
+    ledger.record(paper(title="A"))
+    key = ledger.pending()[0].key
+    with pytest.raises(ValueError):
+        ledger.set_read_state(key, "skimmed")
+
+
+def test_reading_spans_filing_states_including_in_drive(ledger):
+    # Whether a paper is read is independent of whether it's archived, so the
+    # queue must include papers already in Drive.
+    ledger.record(paper(title="A"))
+    key = ledger.pending()[0].key
+    ledger.decide("A", Decision.ACCEPTED)
+    ledger.set_uploaded(key, "DRIVE1")
+    assert [p.key for p in ledger.reading()] == [key]
+
+
+def test_pin_toggles(ledger):
+    ledger.record(paper(title="A"))
+    key = ledger.pending()[0].key
+    ledger.decide("A", Decision.ACCEPTED)
+    assert ledger.get(key).pinned is False
+    ledger.set_pinned(key, True)
+    assert ledger.get(key).pinned is True

@@ -359,6 +359,37 @@
   }
   .section-label { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 1.5rem 0 .6rem; }
 
+  /* Reading list */
+  .read-actions { margin-top: .5rem; align-items: center; flex-wrap: wrap; }
+  /* The reading-state control: unread is quiet, reading takes the accent,
+     read the affirmative green -- state legible at a glance, not just by label. */
+  .readstate {
+    flex: 0 0 auto; min-height: 44px; padding: 0 .8rem; cursor: pointer;
+    border-radius: 10px; border: 1px solid var(--line); background: none;
+    font-size: .85rem; font-weight: 600; color: var(--muted);
+  }
+  .readstate.reading { color: var(--accent); border-color: var(--accent); }
+  .readstate.read { color: var(--accept); border-color: var(--accept); }
+  .read-actions .filingchip {
+    flex: 0 0 auto; font-size: .8rem; color: var(--muted);
+    display: inline-flex; align-items: center; min-height: 44px;
+    overflow-wrap: anywhere;
+  }
+  .read-actions .pin.pinned { color: var(--accent); border-color: var(--accent); }
+  .read-actions .note.has-note { border-color: var(--accent); color: var(--accent); }
+  #rdread { color: var(--accept); }
+  .readdone > summary {
+    cursor: pointer; list-style: none; display: flex; align-items: center;
+    gap: .5rem; min-height: 44px;
+  }
+  .readdone > summary::-webkit-details-marker { display: none; }
+  .readdone > summary::after { content: '▸'; color: var(--muted); transition: transform .15s; }
+  .readdone[open] > summary::after { transform: rotate(90deg); }
+  .readdone > summary .section-label { margin: 0; }
+  .donecount {
+    color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums;
+  }
+
   #filebar {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 6;
     background: var(--card); border-top: 1px solid var(--line);
@@ -576,6 +607,7 @@
   </div>
   <nav>
     <button id="tab-triage" aria-selected="true">Triage<span class="badge" id="badge-triage">0</span></button>
+    <button id="tab-reading" aria-selected="false">Reading<span class="badge" id="badge-reading">0</span></button>
     <button id="tab-filing" aria-selected="false">Filing<span class="badge" id="badge-filing">0</span></button>
     <button id="tab-processed" aria-selected="false">Processed<span class="badge" id="badge-processed">0</span></button>
   </nav>
@@ -636,6 +668,22 @@
     <div id="noprocessed" class="note" hidden>Nothing uploaded yet. Papers you send to Drive appear here.</div>
   </section>
 
+  <section id="view-reading" hidden>
+    <div id="reading-progress-wrap" hidden>
+      <div class="section-label">In progress</div>
+      <div id="reading-progress"></div>
+    </div>
+    <div id="reading-toread-wrap" hidden>
+      <div class="section-label">To read</div>
+      <div id="reading-toread"></div>
+    </div>
+    <details id="reading-read-wrap" class="readdone" hidden>
+      <summary><span class="section-label">Read</span><span class="donecount" id="reading-read-n"></span></summary>
+      <div id="reading-read"></div>
+    </details>
+    <div id="noreading" class="note" hidden>Nothing to read yet. Papers you keep land here.</div>
+  </section>
+
   <section id="view-filing" hidden>
     <div class="filing-head">
       <span class="basefolder" id="basefolder">No base folder set</span>
@@ -672,6 +720,7 @@
     <button id="rdout" aria-label="Zoom out" data-tip="Zoom out"></button>
     <button id="rdin" aria-label="Zoom in" data-tip="Zoom in"></button>
     <button id="rdnotes" aria-label="Show notes" data-tip="Show or hide notes"></button>
+    <button id="rdread" aria-label="Mark as read" data-tip="Mark as read"></button>
     <button id="rdclose" aria-label="Close reader" data-tip="Close"></button>
   </div>
   <div class="rdbody">
@@ -731,6 +780,7 @@ const $ = s => document.querySelector(s);
 const ICONS = {
   check: '<path d="M20 6 9 17l-5-5"/>',
   x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  bookmark: '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>',
   'file-up': '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M12 12v6"/><path d="m15 15-3-3-3 3"/>',
   'trash-2': '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>',
   'folder-input':
@@ -794,6 +844,7 @@ function paintStaticIcons() {
   map['#rdin'] = 'zoom-in';
   map['#rdout'] = 'zoom-out';
   map['#rdnotes'] = 'pencil';
+  map['#rdread'] = 'check';
   for (const [sel, name] of Object.entries(map)) {
     const el = document.querySelector(sel);
     if (el) el.innerHTML = icon(name);
@@ -864,10 +915,10 @@ let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               readerPaper: null, authSignedIn: false,
               alertStats: {}, alertSort: 'pending',
               filing: null, processedPapers: [], rejectedPapers: [],
-              undoStack: [] };
+              readingPapers: [], undoStack: [] };
 
 // Capabilities this page expects the server to have.
-const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf'];
+const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf', 'reading'];
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -927,6 +978,7 @@ function showCounts(c) {
   $('#counts').textContent = parts.join(' · ');
   $('#badge-triage').textContent = pending;
   $('#badge-processed').textContent = archived;
+  $('#badge-reading').textContent = c.unread || 0;
 }
 
 // ---------- triage ----------
@@ -1285,6 +1337,7 @@ function activePapers() {
     return [...(state.filing?.unfiled || []), ...(state.filing?.filed || [])];
   if (state.tab === 'processed') return state.processedPapers || [];
   if (state.tab === 'rejected') return state.rejectedPapers || [];
+  if (state.tab === 'reading') return state.readingPapers || [];
   return state.pending || [];
 }
 
@@ -1439,6 +1492,7 @@ function applyFilters() {
   if (state.tab === 'filing') renderFiling();
   else if (state.tab === 'processed') renderProcessed();
   else if (state.tab === 'rejected') renderRejected();
+  else if (state.tab === 'reading') renderReading();
   else renderTriage();
 }
 
@@ -1939,6 +1993,100 @@ function renderProcessed() {
   renderSearchCount(shown.length, byAlert(raw).length);
 }
 
+// ---------- reading list ----------
+
+const READ_LABEL = {unread: 'Unread', reading: 'Reading', read: 'Read'};
+const NEXT_READ = {unread: 'reading', reading: 'read', read: 'unread'};
+
+// Where a paper stands on the filing axis, shown while reading so you can see
+// what still needs archiving without leaving for the Filing tab.
+function filingChip(p) {
+  if (p.uploaded) return 'in Drive';
+  if (p.dest_folder_name) return `filed → ${esc(p.dest_folder_name)}`;
+  return 'not filed';
+}
+
+function readingCard(p) {
+  const el = document.createElement('article');
+  el.className = 'card';
+  el.dataset.key = p.key;
+  el.innerHTML = cardBody(p) + '<div class="actions read-actions"></div>';
+  const actions = el.querySelector('.read-actions');
+  actions.innerHTML = `
+    <button class="readstate ${p.read_state}" data-tip="Advance reading state">${READ_LABEL[p.read_state] || 'Unread'}</button>
+    ${hasPdfFile(p) ? iconBtn('read', 'book-open', 'Read with notes') : ''}
+    <span class="filingchip">${filingChip(p)}</span>
+    <span class="cardstatus" hidden></span>
+    ${iconBtn('pin' + (p.pinned ? ' pinned' : ''), 'bookmark',
+              p.pinned ? 'Unpin from the top' : 'Pin to the top', 'style="margin-left:auto"')}
+    ${iconBtn('note' + (p.note ? ' has-note' : ''), 'pencil', p.note ? 'Edit note' : 'Add a note')}
+    ${iconBtn('cite', 'quote', 'Copy BibTeX')}`;
+  wireAbstract(el);
+  wirePdfLink(el, p);
+  actions.querySelector('.readstate').addEventListener('click', () => cycleReadState(p, el));
+  actions.querySelector('.read')?.addEventListener('click', () => openReader(p));
+  actions.querySelector('.pin').addEventListener('click', () => togglePin(p, el));
+  actions.querySelector('.note').addEventListener('click', () => editNote(p));
+  actions.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
+  return el;
+}
+
+async function cycleReadState(paper, card) {
+  const next = NEXT_READ[paper.read_state] || 'reading';
+  try {
+    const data = await api(`/api/papers/${encodeURIComponent(paper.key)}/read-state`, {
+      method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({state: next})
+    });
+    showCounts(data.counts);
+    loadReading();
+  } catch (e) { cardStatus(card, `Could not update: ${e.message}`, {bad: true}); }
+}
+
+async function togglePin(paper, card) {
+  try {
+    await api(`/api/papers/${encodeURIComponent(paper.key)}/pin`, {
+      method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({pinned: !paper.pinned})
+    });
+    loadReading();
+  } catch (e) { cardStatus(card, `Could not pin: ${e.message}`, {bad: true}); }
+}
+
+async function loadReading() {
+  try {
+    const data = await api('/api/reading');
+    showCounts(data.counts);
+    state.readingPapers = data.papers;
+    renderReading();
+  } catch (e) { showError(`Could not load the reading list: ${e.message}`); }
+}
+
+function renderReading() {
+  renderAlertFilter();
+  const raw = state.readingPapers || [];
+  const shown = passesFilters(raw);
+  const inprogress = shown.filter(p => p.read_state === 'reading');
+  // Newest-kept order comes from the server; a stable sort floats pins to the
+  // top of the queue without disturbing the rest.
+  const toread = shown.filter(p => p.read_state === 'unread')
+    .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
+  const done = shown.filter(p => p.read_state === 'read');
+
+  $('#reading-progress').replaceChildren(...inprogress.map(readingCard));
+  $('#reading-toread').replaceChildren(...toread.map(readingCard));
+  $('#reading-read').replaceChildren(...done.map(readingCard));
+  $('#reading-progress-wrap').hidden = inprogress.length === 0;
+  $('#reading-toread-wrap').hidden = toread.length === 0;
+  $('#reading-read-wrap').hidden = done.length === 0;
+  $('#reading-read-n').textContent = done.length;
+
+  setListEmpty('#noreading', shown.length, raw.length,
+    'Nothing to read yet. Papers you keep land here.');
+  $('#badge-reading').textContent = raw.filter(p => p.read_state === 'unread').length;
+  renderSearchCount(shown.length, byAlert(raw).length);
+}
+
 async function acceptSuggestion(paper, hint, card) {
   const button = card.querySelector('.suggest');
   button.disabled = true;
@@ -2202,11 +2350,11 @@ $('#sheetok').addEventListener('click', async () => {
 // ---------- tabs ----------
 
 function selectTab(tab) {
-  // Reading is not a tab; moving to one ends it rather than leaving the
-  // reader floating over a different view.
+  // The PDF reader is an overlay, not a tab; switching tabs ends it rather than
+  // leaving it floating over a different view.
   if (state.readerPaper) closeReader();
   state.tab = tab;
-  for (const name of ['triage', 'filing', 'processed']) {
+  for (const name of ['triage', 'reading', 'filing', 'processed']) {
     $(`#tab-${name}`).setAttribute('aria-selected', tab === name);
     $(`#view-${name}`).hidden = tab !== name;
   }
@@ -2222,12 +2370,14 @@ function selectTab(tab) {
   // Triage data is resident, so just re-render it (which refreshes the sidebar
   // for its alerts); the others fetch, then render.
   if (tab === 'triage') renderTriage();
+  if (tab === 'reading') loadReading();
   if (tab === 'filing') loadFiling();
   if (tab === 'processed') loadProcessed();
   if (tab === 'rejected') loadRejected();
 }
 
 $('#tab-triage').addEventListener('click', () => selectTab('triage'));
+$('#tab-reading').addEventListener('click', () => selectTab('reading'));
 $('#tab-filing').addEventListener('click', () => selectTab('filing'));
 $('#tab-processed').addEventListener('click', () => selectTab('processed'));
 $('#rejectedbtn').addEventListener('click', () => {
@@ -2418,6 +2568,7 @@ async function openReader(paper) {
     {className: 'note', textContent: 'Loading…'}));
   $('#reader').hidden = false;
   readerScale = null;
+  markReading(paper);
 
   try {
     const lib = await loadPdfjs();
@@ -2549,6 +2700,36 @@ $('#rdout').addEventListener('click', () => rezoom(0.8));
 $('#rdnotes').addEventListener('click', () => {
   const pane = $('#rdnotepane');
   pane.hidden = !pane.hidden;
+});
+
+// Opening a paper you haven't started counts as starting it.
+async function markReading(paper) {
+  if (paper.read_state !== 'unread') return;
+  try {
+    const data = await api(`/api/papers/${encodeURIComponent(paper.key)}/read-state`, {
+      method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({state: 'reading'})
+    });
+    paper.read_state = 'reading';
+    showCounts(data.counts);
+    if (state.tab === 'reading') loadReading();
+  } catch (e) { /* non-fatal: it simply stays unread */ }
+}
+
+$('#rdread').addEventListener('click', async () => {
+  const paper = state.readerPaper;
+  if (!paper) return;
+  try {
+    const data = await api(`/api/papers/${encodeURIComponent(paper.key)}/read-state`, {
+      method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({state: 'read'})
+    });
+    paper.read_state = 'read';
+    showCounts(data.counts);
+    showNotice('Marked read');
+    closeReader();
+    if (state.tab === 'reading') loadReading();
+  } catch (e) { showError(`Could not mark read: ${e.message}`); }
 });
 
 $('#rdnotesave').addEventListener('click', async () => {
@@ -2685,7 +2866,7 @@ function updateFilterToggle() {
 function syncSidebarVisibility() {
   // Every list view is filterable now, so the sidebar rides along with all of
   // them; only the reader (not a tab) has no list to filter.
-  const relevant = ['triage', 'filing', 'processed', 'rejected'].includes(state.tab);
+  const relevant = ['triage', 'reading', 'filing', 'processed', 'rejected'].includes(state.tab);
   sidebar.style.display = relevant ? '' : 'none';
   filterToggle.style.display = relevant ? '' : 'none';
   if (!relevant) setDrawer(false);
@@ -2703,6 +2884,7 @@ loadTriage();
 loadFiling();
 loadProcessed();
 loadRejected();
+loadReading();
 </script>
 </body>
 </html>

@@ -29,7 +29,10 @@ metadata APIs it queries and the Drive folder you pick.
   page metadata. On a real queue this took abstract coverage from 13 of 67 to
   46 of 67.
 - **Triage UI** for phone or tablet: title, authors, abstract, and links, with
-  accept and reject.
+  keep and drop (swipe, keyboard, or buttons).
+- **Reading list** that tracks what you've kept — unread, reading, read — with a
+  pinned queue and a mark-read control in the reader; reading is a separate axis
+  from filing, so a paper can be in Drive but unread, or read but not yet filed.
 - **Filing** into any Drive folder, with a suggested destination based on your
   folder names and past choices.
 - **Downloads** open-access PDFs, validating them by content rather than by
@@ -142,7 +145,7 @@ anything that matters:
 ## Development
 
 ```bash
-pytest                       # 744 tests, no network required
+pytest                       # 755 tests, no network required
 ./scripts/demo.sh            # drive the pipeline against bundled fixtures
 ```
 

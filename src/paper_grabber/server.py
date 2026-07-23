@@ -88,6 +88,14 @@ class BulkDecisionIn(BaseModel):
     decision: Decision
 
 
+class ReadStateIn(BaseModel):
+    state: str
+
+
+class PinIn(BaseModel):
+    pinned: bool
+
+
 def create_app(
     ledger_path: Path,
     *,
@@ -368,6 +376,36 @@ def create_app(
                 "papers": [paper_view(p) for p in led.processed()],
                 "counts": led.counts(),
             }
+
+    @app.get("/api/reading")
+    def reading() -> dict[str, Any]:
+        """The reading queue: every kept paper with its reading state."""
+        with open_ledger() as led:
+            return {
+                "papers": [paper_view(p) for p in led.reading()],
+                "counts": led.counts(),
+            }
+
+    @app.put("/api/papers/{key}/read-state")
+    def set_read_state(key: str, body: ReadStateIn) -> dict[str, Any]:
+        """Move a kept paper along the reading axis."""
+        with open_ledger() as led:
+            if led.get(key) is None:
+                raise HTTPException(status_code=404, detail="no such paper")
+            try:
+                led.set_read_state(key, body.state)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return {"key": key, "state": body.state, "counts": led.counts()}
+
+    @app.put("/api/papers/{key}/pin")
+    def set_pinned(key: str, body: PinIn) -> dict[str, Any]:
+        """Pin or unpin a paper to the top of the reading queue."""
+        with open_ledger() as led:
+            if led.get(key) is None:
+                raise HTTPException(status_code=404, detail="no such paper")
+            led.set_pinned(key, body.pinned)
+            return {"key": key, "pinned": body.pinned}
 
     @app.post("/api/papers/{key}/local-pdf")
     async def upload_local_pdf(key: str, file: UploadFile = File(...)) -> dict[str, Any]:
@@ -708,6 +746,7 @@ def create_app(
                     "bulk-decision",
                     "rejected",
                     "notes",
+                    "reading",
                 }
             ),
         }

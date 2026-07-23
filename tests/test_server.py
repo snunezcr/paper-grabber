@@ -1459,8 +1459,8 @@ def test_pdf_link_stays_external_before_the_file_exists(client):
 
 
 def test_every_card_wires_the_pdf_link(client):
-    # cardBody is shared by four renderers; a missed one would be a dead link.
-    assert client.get("/").text.count("wirePdfLink(el, p);") == 4
+    # cardBody is shared by five renderers; a missed one would be a dead link.
+    assert client.get("/").text.count("wirePdfLink(el, p);") == 5
 
 
 def test_read_is_offered_whenever_a_paper_can_be_opened(client):
@@ -1839,7 +1839,7 @@ def test_filters_apply_across_all_list_views(client):
     assert "function renderRejected" in body
     assert "const shown = passesFilters(raw);" in body
     # The sidebar is shown on every list view, not just triage.
-    assert "['triage', 'filing', 'processed', 'rejected'].includes(state.tab)" in body
+    assert "['triage', 'reading', 'filing', 'processed', 'rejected'].includes(state.tab)" in body
     # A filtered-empty list reads differently from a genuinely empty one.
     assert "Nothing matches this filter." in body
 
@@ -1849,3 +1849,66 @@ def test_no_folder_suggestion_without_a_pdf(client):
     # PDF lands it in Ready to upload with nothing to upload.
     body = client.get("/").text
     assert "const hint = hasPdfFile(p) ? state.suggestions?.[p.key] : null;" in body
+
+
+# --- reading queue ------------------------------------------------------------
+
+
+def test_reading_endpoint_lists_kept_papers_with_state(seeded):
+    with Ledger(seeded) as led:
+        led.record(AlertPaper(title="Keeper", year=2026))
+        led.decide("Keeper", Decision.ACCEPTED)
+    c = TestClient(create_app(seeded))
+    data = c.get("/api/reading").json()
+    keeper = next(p for p in data["papers"] if p["title"] == "Keeper")
+    assert keeper["read_state"] == "unread"
+    assert keeper["pinned"] is False
+    assert data["counts"]["unread"] >= 1
+
+
+def test_read_state_endpoint_updates(seeded):
+    with Ledger(seeded) as led:
+        led.record(AlertPaper(title="Keeper", year=2026))
+        led.decide("Keeper", Decision.ACCEPTED)
+        key = [p.key for p in led.reading() if p.title == "Keeper"][0]
+    c = TestClient(create_app(seeded))
+    r = c.put(f"/api/papers/{key}/read-state", json={"state": "reading"})
+    assert r.status_code == 200
+    with Ledger(seeded) as led:
+        assert led.get(key).read_state == "reading"
+
+
+def test_read_state_endpoint_rejects_bad_state(seeded):
+    with Ledger(seeded) as led:
+        key = led.pending()[0].key
+    c = TestClient(create_app(seeded))
+    assert c.put(f"/api/papers/{key}/read-state", json={"state": "nope"}).status_code == 400
+
+
+def test_read_state_endpoint_404_for_unknown_paper(seeded):
+    c = TestClient(create_app(seeded))
+    assert c.put("/api/papers/nope/read-state", json={"state": "read"}).status_code == 404
+
+
+def test_pin_endpoint_toggles(seeded):
+    with Ledger(seeded) as led:
+        led.record(AlertPaper(title="Keeper", year=2026))
+        led.decide("Keeper", Decision.ACCEPTED)
+        key = [p.key for p in led.reading() if p.title == "Keeper"][0]
+    c = TestClient(create_app(seeded))
+    assert c.put(f"/api/papers/{key}/pin", json={"pinned": True}).status_code == 200
+    with Ledger(seeded) as led:
+        assert led.get(key).pinned is True
+
+
+def test_reading_view_and_controls_present(client):
+    body = client.get("/").text
+    assert 'id="tab-reading"' in body
+    assert 'id="view-reading"' in body
+    assert "function readingCard" in body
+    assert "function cycleReadState" in body
+    # Opening the reader marks a paper as reading; the reader can mark it read.
+    assert "async function markReading" in body
+    assert "id=\"rdread\"" in body
+    # The badge follows the unread count.
+    assert "$('#badge-reading').textContent = c.unread || 0;" in body
