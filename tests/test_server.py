@@ -1762,3 +1762,16 @@ def test_triage_supports_swipe_and_keyboard(client):
     assert "case 's': case 'ArrowLeft':" in body
     # Button, swipe, and key all record through one path.
     assert "async function commitDecision" in body
+
+
+def test_risky_filing_actions_carry_text_labels(client):
+    # Attach/remove, upload, and unfile show their word beside the glyph so a
+    # bare icon can't be mis-tapped -- the attach/remove pair especially.
+    body = client.get("/").text
+    assert "function textBtn" in body
+    assert "textBtn('up', 'cloud-upload', 'Upload'" in body
+    assert "textBtn('unfile', 'corner-up-left', 'Unfile'" in body
+    assert "textBtn('attach', 'file-up', 'Attach'" in body
+    assert "textBtn('detach', 'trash-2', 'Remove'" in body
+    # The fuller description is still the accessible name, not the short word.
+    assert "'Attach a PDF from this device'" in body

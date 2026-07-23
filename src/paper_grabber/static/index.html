@@ -313,6 +313,11 @@
   /* One size for every icon button on a card, so the row reads as a set
      rather than as buttons that happen to sit together. */
   .filed-actions .iconbtn { flex: 0 0 auto; min-width: 44px; padding: 0; }
+  /* The higher-stakes actions carry their word beside the glyph, so the row
+     reads at a glance and attach/remove can't be confused for each other. */
+  .iconbtn.labelled { gap: .4rem; padding: 0 .8rem; }
+  .filed-actions .iconbtn.labelled { padding: 0 .8rem; }
+  .iconbtn.labelled span { font-size: .9rem; font-weight: 600; white-space: nowrap; }
 
   /* Only the trailing pair is right-aligned. Whichever of them comes first
      takes the auto margin; the other sits against it. */
@@ -736,6 +741,15 @@ function icon(name) {
 function iconBtn(cls, name, label, extra = '') {
   return `<button class="${cls} iconbtn" aria-label="${esc(label)}"
     data-tip="${esc(label)}" ${extra}>${icon(name)}</button>`;
+}
+
+// Like iconBtn, but the label sits beside the icon. Used for the higher-stakes
+// filing actions -- attach, remove, upload, unfile -- where a bare glyph, and
+// the attach/remove pair especially, is easy to mis-tap on a tablet. `text` is
+// the short word on the face; `label` is the fuller tooltip and accessible name.
+function textBtn(cls, name, text, label, extra = '') {
+  return `<button class="${cls} iconbtn labelled" aria-label="${esc(label)}"
+    data-tip="${esc(label)}" ${extra}>${icon(name)}<span>${esc(text)}</span></button>`;
 }
 
 function paintStaticIcons() {
@@ -1423,8 +1437,8 @@ function filingCard(p, {selectable}) {
       actions.innerHTML = `
         ${attachBtn(p)}
         ${hasPdfFile(p) ? iconBtn('read', 'book-open', 'Read with notes') : ''}
-        ${iconBtn('up', 'cloud-upload', 'Upload to Drive')}
-        ${iconBtn('unfile', 'corner-up-left', 'Not yet — clear the destination')}
+        ${textBtn('up', 'cloud-upload', 'Upload', 'Upload to Drive')}
+        ${textBtn('unfile', 'corner-up-left', 'Unfile', 'Not yet — clear the destination')}
         <span class="cardstatus" hidden></span>
         ${iconBtn('note' + (p.note ? ' has-note' : ''), 'pencil',
                   p.note ? 'Edit note' : 'Add a note')}
@@ -1823,8 +1837,8 @@ function attachBtn(p) {
   // Once a file is attached the button becomes a remove control: pressing it
   // drops the file and returns the card to its usual, unattached state.
   return p.staged
-    ? iconBtn('detach', 'trash-2', 'Remove the attached PDF')
-    : iconBtn('attach', 'file-up', 'Attach a PDF from this device');
+    ? textBtn('detach', 'trash-2', 'Remove', 'Remove the attached PDF')
+    : textBtn('attach', 'file-up', 'Attach', 'Attach a PDF from this device');
 }
 
 let pendingAttach = null;

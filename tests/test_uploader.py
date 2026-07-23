@@ -248,7 +248,7 @@ def test_upload_status_before_any_run(seeded):
 def test_filed_cards_have_both_buttons(seeded):
     db, _, staging = seeded
     body = TestClient(create_app(db, staging_path=staging)).get("/").text
-    assert "iconBtn('up'" in body and "iconBtn('unfile'" in body
+    assert "textBtn('up'" in body and "textBtn('unfile'" in body
 
 
 # --- notes reach Drive at upload time -----------------------------------------
