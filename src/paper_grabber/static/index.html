@@ -2057,7 +2057,10 @@ function readingCard(p) {
   wirePdfLink(el, p);
   actions.querySelectorAll('.rseg').forEach(b =>
     b.addEventListener('click', () => setReadState(p, b.dataset.state, el)));
-  actions.querySelector('.read')?.addEventListener('click', () => openReader(p));
+  // `.read.iconbtn`, not `.read`: the "Read" state segment also carries .read,
+  // and it comes first, so a bare .read grabbed the segment and left the actual
+  // Read button dead.
+  actions.querySelector('.read.iconbtn')?.addEventListener('click', () => openReader(p));
   actions.querySelector('.pin').addEventListener('click', () => togglePin(p, el));
   actions.querySelector('.note').addEventListener('click', () => editNote(p));
   actions.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));

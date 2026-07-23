@@ -1925,3 +1925,10 @@ def test_reading_tab_has_a_read_state_filter(client):
     # The list is filtered by the chosen states, on top of search + alerts.
     assert "passesFilters(raw).filter(p => state.readStates.has(p.read_state))" in body
     assert "function renderReadStateFilter" in body
+
+
+def test_reading_read_button_is_selected_unambiguously(client):
+    # The "Read" state segment also has class .read, so the book-open button
+    # must be selected as .read.iconbtn or the segment shadows it.
+    body = client.get("/").text
+    assert "actions.querySelector('.read.iconbtn')?.addEventListener('click', () => openReader(p));" in body
