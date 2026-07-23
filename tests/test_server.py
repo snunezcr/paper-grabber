@@ -649,13 +649,15 @@ def test_alert_selection_is_multi_select(client):
 
 def test_all_button_selects_every_alert(client):
     # It used to clear the selection and rely on "empty means everything",
-    # which left every box unticked and looked like it had done nothing.
+    # which left every box unticked and looked like it had done nothing. Now it
+    # ticks the alerts visible in the current view (other tabs' stay put).
     body = client.get("/").text
-    assert "state.alerts = new Set(alertCounts().keys());" in body
+    assert "for (const name of alertCounts().keys()) state.alerts.add(name);" in body
 
 
 def test_none_button_clears_the_selection(client):
-    assert "state.alerts.clear();" in client.get("/").text
+    assert "for (const name of alertCounts().keys()) state.alerts.delete(name);" \
+        in client.get("/").text
 
 
 def test_a_ticked_box_means_the_alert_is_shown(client):
@@ -932,9 +934,10 @@ def test_search_requires_every_term(client):
 
 
 def test_search_and_alert_filter_compose(client):
-    # The match count is relative to the alert selection, not the whole queue.
+    # Search composes on top of the alert selection, in one shared path that
+    # every list view runs through.
     body = client.get("/").text
-    assert "byAlert(state.pending || []).filter(p => matchesQuery(p, terms))" in body
+    assert "return byAlert(papers).filter(p => matchesQuery(p, terms));" in body
 
 
 def test_empty_search_result_names_the_query(client):
@@ -1800,3 +1803,20 @@ def test_risky_filing_actions_carry_text_labels(client):
     assert "textBtn('detach', 'trash-2', 'Remove'" in body
     # The fuller description is still the accessible name, not the short word.
     assert "'Attach a PDF from this device'" in body
+
+
+def test_filters_apply_across_all_list_views(client):
+    body = client.get("/").text
+    # The sidebar acts on whichever list the current tab shows...
+    assert "function activePapers" in body
+    assert "function passesFilters" in body
+    assert "function applyFilters" in body
+    # ...each list view filters its data through the same path.
+    assert "function renderFiling" in body
+    assert "function renderProcessed" in body
+    assert "function renderRejected" in body
+    assert "const shown = passesFilters(raw);" in body
+    # The sidebar is shown on every list view, not just triage.
+    assert "['triage', 'filing', 'processed', 'rejected'].includes(state.tab)" in body
+    # A filtered-empty list reads differently from a genuinely empty one.
+    assert "Nothing matches this filter." in body

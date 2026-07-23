@@ -853,7 +853,8 @@ let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               pending: [], alerts: new Set(), knownAlerts: new Set(),
               query: '', suggestions: {}, notePaper: null, panelMode: null,
               readerPaper: null, authSignedIn: false,
-              alertStats: {}, alertSort: 'pending' };
+              alertStats: {}, alertSort: 'pending',
+              filing: null, processedPapers: [], rejectedPapers: [] };
 
 // Capabilities this page expects the server to have.
 const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf'];
@@ -1230,9 +1231,19 @@ function alertOf(p) {
   return p.alert_query || NO_ALERT;
 }
 
+// The papers the sidebar acts on -- whichever list the current tab is showing.
+// The search box and alert filter apply to all of them, not just triage.
+function activePapers() {
+  if (state.tab === 'filing')
+    return [...(state.filing?.unfiled || []), ...(state.filing?.filed || [])];
+  if (state.tab === 'processed') return state.processedPapers || [];
+  if (state.tab === 'rejected') return state.rejectedPapers || [];
+  return state.pending || [];
+}
+
 function alertCounts() {
   const counts = new Map();
-  for (const p of state.pending || []) {
+  for (const p of activePapers()) {
     counts.set(alertOf(p), (counts.get(alertOf(p)) || 0) + 1);
   }
   return counts;
@@ -1261,16 +1272,15 @@ function renderAlertFilter() {
   group.hidden = counts.size < 2;
 
   // A ticked box means "show this". Newly seen alerts start ticked, or a new
-  // Scholar alert would arrive invisible; alerts that have been fully triaged
-  // drop out of both sets.
+  // Scholar alert would arrive invisible. The selection is shared across tabs,
+  // so an alert absent from this view is left alone rather than dropped -- it
+  // may be present in another, and dropping it would churn the selection every
+  // time you switch tabs.
   for (const name of counts.keys()) {
     if (!state.knownAlerts.has(name)) {
       state.knownAlerts.add(name);
       state.alerts.add(name);
     }
-  }
-  for (const name of [...state.knownAlerts]) {
-    if (!counts.has(name)) { state.knownAlerts.delete(name); state.alerts.delete(name); }
   }
 
   if (group.hidden) return;
@@ -1296,7 +1306,7 @@ function renderAlertFilter() {
     box.checked = state.alerts.has(name);
     box.addEventListener('change', () => {
       box.checked ? state.alerts.add(name) : state.alerts.delete(name);
-      renderTriage();
+      applyFilters();
     });
     const body = document.createElement('span');
     body.className = 'body';
@@ -1313,17 +1323,20 @@ function renderAlertFilter() {
     }
     const num = document.createElement('span');
     num.className = 'n';
-    num.textContent = n;   // pending in the current queue: what this box shows
+    num.textContent = n;   // how many the box shows in the current view
     row.append(box, body, num);
     return row;
   }));
 
-  const chosen = state.alerts.size;
+  // The summary reflects the alerts visible here, not the shared selection as a
+  // whole -- some selected alerts may belong to other tabs.
+  const visible = [...counts.keys()];
+  const chosen = visible.filter(name => state.alerts.has(name));
   $('#alertsel').textContent =
-    chosen === 0 ? 'None'
-    : chosen === counts.size ? 'All'
-    : chosen === 1 ? [...state.alerts][0]
-    : `${chosen} of ${counts.size}`;
+    chosen.length === 0 ? 'None'
+    : chosen.length === visible.length ? 'All'
+    : chosen.length === 1 ? chosen[0]
+    : `${chosen.length} of ${visible.length}`;
 }
 
 // Accent-insensitive, so "Schrodinger" finds "Schrödinger".
@@ -1363,9 +1376,32 @@ function byAlert(papers) {
   return papers.filter(p => state.alerts.has(alertOf(p)));
 }
 
-function visiblePending() {
+// The alert filter and the search box, together, applied to any list.
+function passesFilters(papers) {
   const terms = queryTerms();
-  return byAlert(state.pending || []).filter(p => matchesQuery(p, terms));
+  return byAlert(papers).filter(p => matchesQuery(p, terms));
+}
+
+function visiblePending() {
+  return passesFilters(state.pending || []);
+}
+
+// Re-render whichever list the current tab shows, from data already loaded --
+// filters never need a round-trip.
+function applyFilters() {
+  if (state.tab === 'filing') renderFiling();
+  else if (state.tab === 'processed') renderProcessed();
+  else if (state.tab === 'rejected') renderRejected();
+  else renderTriage();
+}
+
+// Empty-state text that tells the two empties apart: a filtered-away list is
+// not the same as a genuinely empty one.
+function setListEmpty(sel, shown, raw, emptyMsg) {
+  const el = $(sel);
+  if (shown > 0) { el.hidden = true; return; }
+  el.hidden = false;
+  el.textContent = raw > 0 ? 'Nothing matches this filter.' : emptyMsg;
 }
 
 function renderTriage() {
@@ -1386,14 +1422,13 @@ function renderTriage() {
         ? 'Nothing left in this selection.'
         : 'Nothing to triage. Press Check now.';
 
-  renderSearchCount(shown.length, terms.length);
+  renderSearchCount(shown.length, byAlert(state.pending || []).length);
 }
 
-function renderSearchCount(shown, hasTerms) {
+function renderSearchCount(shown, total) {
   const el = $('#qcount');
   $('#qclear').hidden = !state.query;
-  if (!hasTerms) { el.hidden = true; return; }
-  const total = byAlert(state.pending || []).length;
+  if (!queryTerms().length) { el.hidden = true; return; }
   el.textContent = `${shown} of ${total} match`;
   el.classList.toggle('none', shown === 0);
   el.hidden = false;
@@ -1821,18 +1856,37 @@ async function loadRejected() {
   try {
     const data = await api('/api/rejected');
     showCounts(data.counts);
-    $('#rejected').replaceChildren(...data.papers.map(rejectedCard));
-    $('#norejected').hidden = data.papers.length > 0;
+    state.rejectedPapers = data.papers;
+    renderRejected();
   } catch (e) { showError(`Could not load dropped papers: ${e.message}`); }
+}
+
+function renderRejected() {
+  renderAlertFilter();
+  const raw = state.rejectedPapers || [];
+  const shown = passesFilters(raw);
+  $('#rejected').replaceChildren(...shown.map(rejectedCard));
+  setListEmpty('#norejected', shown.length, raw.length, 'Nothing dropped yet.');
+  renderSearchCount(shown.length, byAlert(raw).length);
 }
 
 async function loadProcessed() {
   try {
     const data = await api('/api/processed');
     showCounts(data.counts);
-    $('#processed').replaceChildren(...data.papers.map(processedCard));
-    $('#noprocessed').hidden = data.papers.length > 0;
+    state.processedPapers = data.papers;
+    renderProcessed();
   } catch (e) { showError(`Could not load processed papers: ${e.message}`); }
+}
+
+function renderProcessed() {
+  renderAlertFilter();
+  const raw = state.processedPapers || [];
+  const shown = passesFilters(raw);
+  $('#processed').replaceChildren(...shown.map(processedCard));
+  setListEmpty('#noprocessed', shown.length, raw.length,
+    'Nothing uploaded yet. Papers you send to Drive appear here.');
+  renderSearchCount(shown.length, byAlert(raw).length);
 }
 
 async function acceptSuggestion(paper, hint, card) {
@@ -1935,22 +1989,35 @@ async function loadFiling() {
   try {
     await loadSuggestions();
     const data = await api('/api/accepted');
+    state.filing = data;
     state.base = data.base;
     $('#basefolder').textContent = data.base.folder_name
       ? `Base folder: ${data.base.folder_name}`
       : 'No base folder set';
-
-    // Drop selections for papers that are no longer unfiled.
-    const live = new Set(data.unfiled.map(p => p.key));
-    for (const k of [...state.selected]) if (!live.has(k)) state.selected.delete(k);
-
-    $('#unfiled').replaceChildren(...data.unfiled.map(p => filingCard(p, {selectable: true})));
-    $('#filed').replaceChildren(...data.filed.map(p => filingCard(p, {selectable: false})));
-    $('#filed-wrap').hidden = data.filed.length === 0;
-    $('#nofiling').hidden = data.unfiled.length + data.filed.length > 0;
-    $('#badge-filing').textContent = data.unfiled.length;
-    refreshFileBar();
+    renderFiling();
   } catch (e) { showError(`Could not load accepted papers: ${e.message}`); }
+}
+
+function renderFiling() {
+  renderAlertFilter();
+  const data = state.filing || {unfiled: [], filed: []};
+  const unfiled = passesFilters(data.unfiled);
+  const filed = passesFilters(data.filed);
+
+  // Selections only make sense for papers still unfiled and still shown.
+  const live = new Set(unfiled.map(p => p.key));
+  for (const k of [...state.selected]) if (!live.has(k)) state.selected.delete(k);
+
+  $('#unfiled').replaceChildren(...unfiled.map(p => filingCard(p, {selectable: true})));
+  $('#filed').replaceChildren(...filed.map(p => filingCard(p, {selectable: false})));
+  $('#filed-wrap').hidden = filed.length === 0;
+  $('#badge-filing').textContent = data.unfiled.length;   // the badge is the true total
+  setListEmpty('#nofiling', unfiled.length + filed.length,
+    data.unfiled.length + data.filed.length,
+    'Nothing accepted yet. Papers you keep appear here.');
+  refreshFileBar();
+  renderSearchCount(unfiled.length + filed.length,
+    byAlert(data.unfiled).length + byAlert(data.filed).length);
 }
 
 $('#selall').addEventListener('click', () => {
@@ -2103,6 +2170,9 @@ function selectTab(tab) {
     || (state.lastUndo.keys ? tab !== 'filing' : tab !== 'triage');
   syncSidebarVisibility();
   refreshFileBar();
+  // Triage data is resident, so just re-render it (which refreshes the sidebar
+  // for its alerts); the others fetch, then render.
+  if (tab === 'triage') renderTriage();
   if (tab === 'filing') loadFiling();
   if (tab === 'processed') loadProcessed();
   if (tab === 'rejected') loadRejected();
@@ -2251,14 +2321,14 @@ const searchInput = $('#q');
 
 searchInput.addEventListener('input', () => {
   state.query = searchInput.value;
-  renderTriage();
+  applyFilters();
 });
 
 $('#qclear').addEventListener('click', () => {
   state.query = '';
   searchInput.value = '';
   searchInput.focus();
-  renderTriage();
+  applyFilters();
 });
 
 searchInput.addEventListener('keydown', e => {
@@ -2478,14 +2548,16 @@ if (window.ResizeObserver) {
 }
 syncHeaderHeight();
 
+// All/None act on the alerts visible in the current view, leaving any
+// selection that belongs to other tabs untouched.
 $('#fg-alerts').querySelector('[data-all]').addEventListener('click', () => {
-  state.alerts = new Set(alertCounts().keys());
-  renderTriage();
+  for (const name of alertCounts().keys()) state.alerts.add(name);
+  applyFilters();
 });
 
 $('#fg-alerts').querySelector('[data-none]').addEventListener('click', () => {
-  state.alerts.clear();
-  renderTriage();
+  for (const name of alertCounts().keys()) state.alerts.delete(name);
+  applyFilters();
 });
 
 // Reordering the sidebar doesn't change which papers show, so re-render the
@@ -2562,7 +2634,9 @@ function updateFilterToggle() {
 
 // Filters apply to the triage queue only, for now.
 function syncSidebarVisibility() {
-  const relevant = state.tab === 'triage';
+  // Every list view is filterable now, so the sidebar rides along with all of
+  // them; only the reader (not a tab) has no list to filter.
+  const relevant = ['triage', 'filing', 'processed', 'rejected'].includes(state.tab);
   sidebar.style.display = relevant ? '' : 'none';
   filterToggle.style.display = relevant ? '' : 'none';
   if (!relevant) setDrawer(false);
