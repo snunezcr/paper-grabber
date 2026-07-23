@@ -1906,7 +1906,7 @@ def test_reading_view_and_controls_present(client):
     assert 'id="tab-reading"' in body
     assert 'id="view-reading"' in body
     assert "function readingCard" in body
-    assert "function cycleReadState" in body
+    assert "function setReadState" in body
     # Opening the reader marks a paper as reading; the reader can mark it read.
     assert "async function markReading" in body
     assert "id=\"rdread\"" in body

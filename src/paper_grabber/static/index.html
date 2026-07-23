@@ -365,15 +365,22 @@
      fill the width" rule -- these are compact icon buttons, like Filing's. */
   .read-actions button { flex: 0 0 auto; min-height: 44px; font-size: .9rem; }
   .read-actions .iconbtn { min-width: 44px; padding: 0; }
-  /* The reading-state control: unread is quiet, reading takes the accent,
-     read the affirmative green -- state legible at a glance, not just by label. */
-  .readstate {
-    padding: 0 .8rem; cursor: pointer;
-    border-radius: 10px; border: 1px solid var(--line); background: none;
-    font-weight: 600; color: var(--muted);
+  /* Reading-state control: an explicit three-way switch, active segment
+     carrying the state's colour -- unread quiet, reading the accent, read the
+     affirmative green -- so the current state is legible and any state is one tap. */
+  .readseg {
+    flex: 0 0 auto; display: inline-flex; border: 1px solid var(--line);
+    border-radius: 10px; overflow: hidden;
   }
-  .readstate.reading { color: var(--accent); border-color: var(--accent); }
-  .readstate.read { color: var(--accept); border-color: var(--accept); }
+  .readseg .rseg {
+    min-height: 44px; padding: 0 .7rem; border: 0; cursor: pointer;
+    border-left: 1px solid var(--line); background: none;
+    color: var(--muted); font-size: .82rem; font-weight: 600;
+  }
+  .readseg .rseg:first-child { border-left: 0; }
+  .readseg .rseg[aria-pressed="true"].unread { background: var(--line); color: var(--ink); }
+  .readseg .rseg[aria-pressed="true"].reading { background: var(--accent); color: #fff; }
+  .readseg .rseg[aria-pressed="true"].read { background: var(--accept); color: #fff; }
   /* Filing status shows as a quiet icon (label in its tooltip), not text. */
   .read-actions .filingchip {
     flex: 0 0 auto; color: var(--muted);
@@ -2001,7 +2008,6 @@ function renderProcessed() {
 // ---------- reading list ----------
 
 const READ_LABEL = {unread: 'Unread', reading: 'Reading', read: 'Read'};
-const NEXT_READ = {unread: 'reading', reading: 'read', read: 'unread'};
 
 // Where a paper stands on the filing axis, shown while reading so you can see
 // what still needs archiving without leaving for the Filing tab. An icon, not
@@ -2019,8 +2025,14 @@ function readingCard(p) {
   el.innerHTML = cardBody(p) + '<div class="actions read-actions"></div>';
   const actions = el.querySelector('.read-actions');
   const chip = filingChip(p);
+  // Explicit three-way control: tap the state you want. A single cycling pill
+  // made "mark unread" reachable only from "read", so the same tap meant
+  // different things depending on state.
+  const seg = ['unread', 'reading', 'read'].map(s =>
+    `<button class="rseg ${s}" data-state="${s}" aria-pressed="${p.read_state === s}"` +
+    ` data-tip="Mark ${READ_LABEL[s].toLowerCase()}">${READ_LABEL[s]}</button>`).join('');
   actions.innerHTML = `
-    <button class="readstate ${p.read_state}" data-tip="Advance reading state">${READ_LABEL[p.read_state] || 'Unread'}</button>
+    <div class="readseg" role="group" aria-label="Reading state">${seg}</div>
     ${hasPdfFile(p) ? iconBtn('read', 'book-open', 'Read with notes') : ''}
     ${chip ? `<span class="filingchip" data-tip="${esc(chip.tip)}" aria-label="${esc(chip.tip)}">${icon(chip.icon)}</span>` : ''}
     <span class="cardstatus" hidden></span>
@@ -2030,7 +2042,8 @@ function readingCard(p) {
     ${iconBtn('cite', 'quote', 'Copy BibTeX')}`;
   wireAbstract(el);
   wirePdfLink(el, p);
-  actions.querySelector('.readstate').addEventListener('click', () => cycleReadState(p, el));
+  actions.querySelectorAll('.rseg').forEach(b =>
+    b.addEventListener('click', () => setReadState(p, b.dataset.state, el)));
   actions.querySelector('.read')?.addEventListener('click', () => openReader(p));
   actions.querySelector('.pin').addEventListener('click', () => togglePin(p, el));
   actions.querySelector('.note').addEventListener('click', () => editNote(p));
@@ -2038,8 +2051,8 @@ function readingCard(p) {
   return el;
 }
 
-async function cycleReadState(paper, card) {
-  const next = NEXT_READ[paper.read_state] || 'reading';
+async function setReadState(paper, next, card) {
+  if (paper.read_state === next) return;   // already there; nothing to do
   try {
     const data = await api(`/api/papers/${encodeURIComponent(paper.key)}/read-state`, {
       method: 'PUT', headers: {'Content-Type': 'application/json'},
