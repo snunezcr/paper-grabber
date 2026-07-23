@@ -555,7 +555,12 @@
     width: 26px; height: 26px; font-size: 1.1rem; line-height: 1;
   }
   /* Highlights list in the notes pane. */
-  #rdhllist { display: flex; flex-direction: column; gap: .4rem; }
+  #rdhllist {
+    display: flex; flex-direction: column; gap: .4rem;
+    /* Takes the remaining third and scrolls, so a long list can't push the
+       last highlights off the bottom of the pane. */
+    flex: 1 1 0; min-height: 3rem; overflow-y: auto;
+  }
   .hlitem { display: flex; align-items: flex-start; gap: .45rem; font-size: .82rem; }
   .hlitem .hldot { flex: 0 0 auto; width: .7rem; height: .7rem; border-radius: 2px; margin-top: .25rem; }
   .hlitem .hlquote {
@@ -575,7 +580,9 @@
   }
   #rdnotepane[hidden] { display: none; }
   #rdnote {
-    flex: 1; min-height: 6rem; width: 100%; padding: .6rem; resize: none;
+    /* Keeps roughly two-thirds of the free space and never drops below a
+       usable writing height, however many highlights there are. */
+    flex: 2 1 auto; min-height: 5rem; width: 100%; padding: .6rem; resize: none;
     font: 15px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--ink);
     border: 1px solid var(--line); border-radius: 8px;
   }
@@ -3035,6 +3042,10 @@ async function renderPage(placeholder, scale) {
     const viewport = page.getViewport({scale});
     const vw = Math.floor(viewport.width), vh = Math.floor(viewport.height);
 
+    // Fetch the text (for selection) in parallel with painting the canvas, so
+    // the page is selectable almost as soon as it appears, not a beat later.
+    const textContentP = page.getTextContent().catch(() => null);
+
     const canvas = document.createElement('canvas');
     // Match the device pixel ratio or text is soft on a high-DPI tablet.
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -3074,8 +3085,8 @@ async function renderPage(placeholder, scale) {
     // Text layer after the swap, so the page shows immediately and selection
     // fills in a beat later. Failure here just means no selection on this page.
     try {
-      const tc = await page.getTextContent();
-      if (wrap.isConnected) {
+      const tc = await textContentP;   // usually already resolved by now
+      if (tc && wrap.isConnected) {
         await new pdfjs.TextLayer({textContentSource: tc, container: textEl, viewport}).render();
       }
     } catch (e) { /* selection unavailable on this page */ }
