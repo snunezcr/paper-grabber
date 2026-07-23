@@ -968,8 +968,10 @@ function triageCard(p) {
     <div class="swipefb keep" aria-hidden="true">Keep</div>
     <div class="swipefb skip" aria-hidden="true">Skip</div>` + cardBody(p) + `
     <div class="actions">
-      ${iconBtn('yes', 'check', 'Interesting (press A)')}
+      ${/* Ordered to match the swipe axis: skip (red) left, keep (green) right,
+           so swiping left and the left button mean the same thing. */''}
       ${iconBtn('no', 'x', 'Skip (press S)')}
+      ${iconBtn('yes', 'check', 'Interesting (press A)')}
     </div>`;
   el._paper = p;   // so keyboard and swipe handlers can find it
   wireAbstract(el);
