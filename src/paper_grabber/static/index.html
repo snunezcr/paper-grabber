@@ -173,6 +173,15 @@
     font-variant-numeric: tabular-nums;
   }
   .qcount.none { color: var(--reject); }
+  /* Search scope: this view, or the whole kept library. */
+  .scope { display: flex; gap: .35rem; margin: .5rem 0 .1rem; }
+  .scopebtn {
+    flex: 1; min-height: 34px; font-size: .78rem; font-weight: 600; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 8px; background: none; color: var(--muted);
+  }
+  .scopebtn[aria-pressed="true"] {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+  }
 
   .optbar { display: flex; gap: .4rem; margin: .2rem 0 .4rem; }
   .optbar button {
@@ -648,9 +657,13 @@
   <div class="fgroup fsearch">
     <label class="shlabel" for="q">Search</label>
     <div class="searchrow">
-      <input id="q" type="search" placeholder="title, author, venue, abstract"
+      <input id="q" type="search" placeholder="title, author, venue, abstract, notes"
              autocomplete="off" spellcheck="false">
       <button id="qclear" title="Clear search" aria-label="Clear search" hidden>&times;</button>
+    </div>
+    <div class="scope" role="group" aria-label="Search scope">
+      <button type="button" class="scopebtn" data-scope="view" aria-pressed="true">This view</button>
+      <button type="button" class="scopebtn" data-scope="library" aria-pressed="false">Library</button>
     </div>
     <div id="qcount" class="qcount" hidden></div>
   </div>
@@ -717,6 +730,12 @@
       <div id="reading-read"></div>
     </details>
     <div id="noreading" class="note" hidden>Nothing to read yet. Papers you keep land here.</div>
+  </section>
+
+  <section id="view-recall" hidden>
+    <div class="section-label" id="recall-head">Library</div>
+    <div id="recall-list"></div>
+    <div id="norecall" class="note" hidden>Type to search everything you've kept — titles, abstracts, and your notes.</div>
   </section>
 
   <section id="view-filing" hidden>
@@ -955,10 +974,43 @@ let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               alertStats: {}, alertSort: 'pending',
               filing: null, processedPapers: [], rejectedPapers: [],
               readingPapers: [], readStates: new Set(['unread', 'reading', 'read']),
-              undoStack: [] };
+              searchScope: 'view', corpus: null, undoStack: [] };
 
 // Capabilities this page expects the server to have.
-const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf', 'reading'];
+const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf', 'reading', 'corpus'];
+
+// A tiny IndexedDB key/value store for the recall corpus, which can outgrow
+// localStorage's ~5 MB. Best-effort: if IndexedDB is unavailable or errors, the
+// promises resolve to null / no-op and recall just refetches each session.
+function idb(mode, fn) {
+  return new Promise(resolve => {
+    if (!window.indexedDB) return resolve(null);
+    let open;
+    try { open = indexedDB.open('rs', 1); } catch (e) { return resolve(null); }
+    open.onupgradeneeded = () => open.result.createObjectStore('kv');
+    open.onerror = () => resolve(null);
+    open.onsuccess = () => {
+      try {
+        const store = open.result.transaction('kv', mode).objectStore('kv');
+        fn(store, resolve);
+      } catch (e) { resolve(null); }
+    };
+  });
+}
+function idbGet(key) {
+  return idb('readonly', (store, resolve) => {
+    const r = store.get(key);
+    r.onsuccess = () => resolve(r.result ?? null);
+    r.onerror = () => resolve(null);
+  });
+}
+function idbSet(key, val) {
+  return idb('readwrite', (store, resolve) => {
+    store.put(val, key);
+    store.transaction.oncomplete = () => resolve();
+    store.transaction.onerror = () => resolve();
+  });
+}
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -1509,13 +1561,15 @@ function fold(text) {
 }
 
 function searchHaystack(p) {
-  // Abstracts are worth searching now that most papers have a real one.
+  // Abstracts are worth searching now that most papers have a real one; notes
+  // make recall work -- "what did I say about this?" is half the point.
   return fold([
     p.title,
     (p.authors || []).join(' '),
     p.venue,
     p.abstract,
     p.doi,
+    p.note,
   ].filter(Boolean).join(' \u0000 '));
 }
 
@@ -2064,6 +2118,100 @@ function renderProcessed() {
   renderSearchCount(shown.length, byAlert(raw).length);
 }
 
+// ---------- library recall ----------
+// A global text search over everything you've kept -- titles, abstracts, and
+// your notes -- whatever tab you're on. The corpus is fetched once and cached
+// in IndexedDB (it can outgrow localStorage), stale-while-revalidate.
+
+async function loadCorpus() {
+  if (!state.corpus) {
+    const cached = await idbGet('corpus');
+    if (cached && !state.corpus) { state.corpus = cached; renderRecall(); }
+  }
+  try {
+    const data = await api('/api/corpus');
+    state.corpus = data.papers;
+    renderRecall();
+    idbSet('corpus', data.papers);
+  } catch (e) { /* keep whatever we had; recall still works on the cache */ }
+}
+
+function recallCard(p) {
+  const el = document.createElement('article');
+  el.className = 'card';
+  el.dataset.key = p.key;
+  el.innerHTML = cardBody(p) + '<div class="actions read-actions"></div>';
+  const actions = el.querySelector('.read-actions');
+  const chip = filingChip(p);
+  actions.innerHTML = `
+    ${hasPdfFile(p) ? iconBtn('read', 'book-open', 'Read with notes') : ''}
+    ${chip ? `<span class="filingchip" data-tip="${esc(chip.tip)}" aria-label="${esc(chip.tip)}">${icon(chip.icon)}</span>` : ''}
+    ${iconBtn('cite', 'quote', 'Copy BibTeX', 'style="margin-left:auto"')}`;
+  wireAbstract(el);
+  wirePdfLink(el, p);
+  actions.querySelector('.read.iconbtn')?.addEventListener('click', () => openReader(p));
+  actions.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
+  return el;
+}
+
+const RECALL_CAP = 300;   // a broad query shouldn't try to render the whole library
+function renderRecall() {
+  if (state.searchScope !== 'library') return;
+  resetCardObs();
+  const terms = queryTerms();
+  const corpus = state.corpus || [];
+  // Nothing shows until you type -- the library is a search, not a dump.
+  const matches = terms.length ? corpus.filter(p => matchesQuery(p, terms)) : [];
+  const shown = matches.slice(0, RECALL_CAP);
+  $('#recall-list').replaceChildren(...shown.map(recallCard));
+
+  const empty = $('#norecall');
+  if (!terms.length) {
+    empty.hidden = false;
+    empty.textContent = `Search your library of ${corpus.length} kept `
+      + `paper${corpus.length === 1 ? '' : 's'} — titles, abstracts, and your notes.`;
+  } else if (!matches.length) {
+    empty.hidden = false;
+    empty.textContent = `Nothing in your library matches "${state.query}".`;
+  } else {
+    empty.hidden = true;
+  }
+  $('#recall-head').textContent = !terms.length ? 'Library'
+    : matches.length > RECALL_CAP ? `Library — first ${RECALL_CAP} of ${matches.length}, refine to narrow`
+    : `Library — ${matches.length} of ${corpus.length}`;
+  renderSearchCount(shown.length, corpus.length);
+}
+
+function updateScopeToggle() {
+  for (const b of document.querySelectorAll('.scopebtn'))
+    b.setAttribute('aria-pressed', String(b.dataset.scope === state.searchScope));
+}
+
+function hideTabViews() {
+  for (const name of ['triage', 'reading', 'filing', 'processed']) $(`#view-${name}`).hidden = true;
+  $('#view-rejected').hidden = true;
+}
+
+// Library recall stands in for the tab views while it's active; the per-tab
+// alert and read-state filters don't apply to a global search, so hide them.
+function setScope(scope) {
+  if (scope === state.searchScope) return;
+  state.searchScope = scope;
+  updateScopeToggle();
+  if (scope === 'library') {
+    hideTabViews();
+    $('#fg-alerts').hidden = true;
+    $('#fg-readstate').hidden = true;
+    $('#view-recall').hidden = false;
+    loadCorpus();
+    renderRecall();
+    searchInput.focus();
+  } else {
+    $('#view-recall').hidden = true;
+    selectTab(state.tab);   // restores the tab view and its filter groups
+  }
+}
+
 // ---------- reading list ----------
 
 const READ_LABEL = {unread: 'Unread', reading: 'Reading', read: 'Read'};
@@ -2492,6 +2640,12 @@ function selectTab(tab) {
   // The PDF reader is an overlay, not a tab; switching tabs ends it rather than
   // leaving it floating over a different view.
   if (state.readerPaper) closeReader();
+  // Choosing a tab leaves library recall.
+  if (state.searchScope === 'library') {
+    state.searchScope = 'view';
+    updateScopeToggle();
+    $('#view-recall').hidden = true;
+  }
   state.tab = tab;
   for (const name of ['triage', 'reading', 'filing', 'processed']) {
     $(`#tab-${name}`).setAttribute('aria-selected', tab === name);
@@ -2657,17 +2811,25 @@ function showNotice(msg) {
 
 const searchInput = $('#q');
 
+function runSearch() {
+  if (state.searchScope === 'library') renderRecall();
+  else applyFilters();
+}
+
 searchInput.addEventListener('input', () => {
   state.query = searchInput.value;
-  applyFilters();
+  runSearch();
 });
 
 $('#qclear').addEventListener('click', () => {
   state.query = '';
   searchInput.value = '';
   searchInput.focus();
-  applyFilters();
+  runSearch();
 });
+
+for (const b of document.querySelectorAll('.scopebtn'))
+  b.addEventListener('click', () => setScope(b.dataset.scope));
 
 searchInput.addEventListener('keydown', e => {
   if (e.key === 'Escape' && state.query) {

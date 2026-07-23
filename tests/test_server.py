@@ -1459,8 +1459,8 @@ def test_pdf_link_stays_external_before_the_file_exists(client):
 
 
 def test_every_card_wires_the_pdf_link(client):
-    # cardBody is shared by five renderers; a missed one would be a dead link.
-    assert client.get("/").text.count("wirePdfLink(el, p);") == 5
+    # cardBody is shared by six renderers; a missed one would be a dead link.
+    assert client.get("/").text.count("wirePdfLink(el, p);") == 6
 
 
 def test_read_is_offered_whenever_a_paper_can_be_opened(client):
@@ -1975,3 +1975,27 @@ def test_reading_and_stored_paint_from_cache(client):
     assert "writeCache(READING_CACHE_KEY, data.papers);" in body
     assert "const cached = readCache(PROCESSED_CACHE_KEY);" in body
     assert "writeCache(PROCESSED_CACHE_KEY, data.papers);" in body
+
+
+def test_corpus_endpoint_returns_every_kept_paper_with_notes(seeded):
+    with Ledger(seeded) as led:
+        led.record(AlertPaper(title="Kept No PDF", year=2026))
+        led.decide("Kept No PDF", Decision.ACCEPTED)
+        key = [p.key for p in led.accepted_all() if p.title == "Kept No PDF"][0]
+        led.set_note(key, "compare with the bosonic decoder")
+    c = TestClient(create_app(seeded))
+    papers = c.get("/api/corpus").json()["papers"]
+    kept = next(p for p in papers if p["title"] == "Kept No PDF")
+    assert kept["note"] == "compare with the bosonic decoder"
+
+
+def test_library_recall_search(client):
+    body = client.get("/").text
+    # Notes are in the search haystack now.
+    assert "p.doi,\n    p.note,\n  ].filter(Boolean)" in body
+    # A scope toggle, a corpus loader cached in IndexedDB, and a recall view.
+    assert 'data-scope="library"' in body
+    assert "async function loadCorpus" in body
+    assert "idbSet('corpus', data.papers);" in body
+    assert "function renderRecall" in body
+    assert "state.searchScope === 'library'" in body

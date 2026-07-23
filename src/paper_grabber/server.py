@@ -386,6 +386,13 @@ def create_app(
                 "counts": led.counts(),
             }
 
+    @app.get("/api/corpus")
+    def corpus() -> dict[str, Any]:
+        """Every kept paper, for searching your library -- titles, abstracts,
+        and the notes you wrote, across filing and reading states."""
+        with open_ledger() as led:
+            return {"papers": [paper_view(p) for p in led.accepted_all()]}
+
     @app.put("/api/papers/{key}/read-state")
     def set_read_state(key: str, body: ReadStateIn) -> dict[str, Any]:
         """Move a kept paper along the reading axis."""
@@ -747,6 +754,7 @@ def create_app(
                     "rejected",
                     "notes",
                     "reading",
+                    "corpus",
                 }
             ),
         }

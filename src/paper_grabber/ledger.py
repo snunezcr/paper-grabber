@@ -394,14 +394,11 @@ class Ledger:
         ).fetchall()
         return [self._row(r) for r in rows]
 
-    def reading(self) -> list[LedgerPaper]:
-        """Kept papers you can actually open, newest decision first.
+    def accepted_all(self) -> list[LedgerPaper]:
+        """Every kept paper, readable or not, newest decision first.
 
-        Spans the whole accepted set -- unfiled, filed, and already in Drive --
-        because whether a paper is read has nothing to do with whether its PDF
-        has been archived. But a paper with no PDF to open is not something you
-        can read, so it waits in Filing until it has a file rather than sitting
-        unreadable in the queue.
+        The recall corpus: everything you accepted, across filing states and
+        whether or not it has a PDF, so a search can find anything you kept.
         """
         rows = self._db.execute(
             "SELECT key, title, payload, decision, first_seen, decided_at,"
@@ -410,7 +407,17 @@ class Ledger:
             " FROM papers WHERE decision = ? ORDER BY decided_at DESC",
             (Decision.ACCEPTED.value,),
         ).fetchall()
-        return [p for p in (self._row(r) for r in rows) if can_read(p)]
+        return [self._row(r) for r in rows]
+
+    def reading(self) -> list[LedgerPaper]:
+        """Kept papers you can actually open, newest decision first.
+
+        The accepted set minus what has no PDF: whether a paper is read has
+        nothing to do with whether its PDF is archived, but a paper with nothing
+        to open is not something you can read, so it waits in Filing for a file
+        rather than sitting unreadable in the queue.
+        """
+        return [p for p in self.accepted_all() if can_read(p)]
 
     def set_read_state(self, key: str, state: str) -> bool:
         """Move a paper along the reading axis: unread, reading, or read."""

@@ -33,6 +33,8 @@ metadata APIs it queries and the Drive folder you pick.
 - **Reading list** that tracks what you've kept — unread, reading, read — with a
   pinned queue and a mark-read control in the reader; reading is a separate axis
   from filing, so a paper can be in Drive but unread, or read but not yet filed.
+- **Library recall** — a global search across everything you've kept: titles,
+  abstracts, and the notes you wrote, whatever tab you're on.
 - **Filing** into any Drive folder, with a suggested destination based on your
   folder names and past choices.
 - **Downloads** open-access PDFs, validating them by content rather than by
@@ -145,7 +147,7 @@ anything that matters:
 ## Development
 
 ```bash
-pytest                       # 762 tests, no network required
+pytest                       # 765 tests, no network required
 ./scripts/demo.sh            # drive the pipeline against bundled fixtures
 ```
 

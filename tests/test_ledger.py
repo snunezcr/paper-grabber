@@ -588,3 +588,13 @@ def test_pin_toggles(ledger):
     assert ledger.get(key).pinned is False
     ledger.set_pinned(key, True)
     assert ledger.get(key).pinned is True
+
+
+def test_accepted_all_includes_papers_with_no_pdf(ledger):
+    # The recall corpus is everything kept, readable or not.
+    ledger.record(paper(title="Has PDF", url=READABLE))
+    ledger.record(paper(title="No PDF"))
+    for t in ("Has PDF", "No PDF"):
+        ledger.decide(t, Decision.ACCEPTED)
+    assert sorted(p.title for p in ledger.accepted_all()) == ["Has PDF", "No PDF"]
+    assert [p.title for p in ledger.reading()] == ["Has PDF"]   # readable only
