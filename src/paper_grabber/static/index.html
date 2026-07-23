@@ -499,6 +499,37 @@
     border: 1px solid var(--line); border-radius: 8px;
     background: var(--card); color: var(--ink);
   }
+
+  /* Annotation mode toolbar: select / highlight / draw / erase, plus the pen's
+     colour and width when drawing. */
+  .rdtools {
+    flex: 0 0 auto; display: flex; align-items: center; gap: .3rem;
+    padding: .35rem .75rem; overflow-x: auto;
+    border-bottom: 1px solid var(--line); background: var(--card);
+  }
+  .rdtools button {
+    flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    min-width: 40px; height: 36px; cursor: pointer; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 8px; background: none;
+  }
+  .rdmode[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .rddrawopts { display: inline-flex; align-items: center; gap: .3rem; }
+  .rdsep { flex: 0 0 auto; width: 1px; height: 22px; background: var(--line); margin: 0 .2rem; }
+  .rdtools .inkcolor {
+    width: 26px; min-width: 26px; height: 26px; padding: 0; border-radius: 50%;
+    border: 1px solid rgba(0,0,0,.3);
+  }
+  .inkcolor[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .inkwidth span { display: inline-block; border-radius: 50%; background: currentColor; }
+  .inkwidth[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  /* Ink layer: above highlights, below the text layer so text stays selectable
+     in the text modes; the pen reaches it once the text layer is switched off. */
+  .rdink { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; pointer-events: none; }
+  #reader.mode-draw .rdtext, #reader.mode-erase .rdtext { pointer-events: none; }
+  #reader.mode-draw #rddoc { cursor: crosshair; }
+  #reader.mode-erase #rddoc { cursor: pointer; }
+
   .rdbody { flex: 1; display: flex; min-height: 0; }
   #rddoc {
     flex: 1; min-width: 0; overflow: auto; padding: 1rem .5rem 2rem;
@@ -843,6 +874,22 @@
     <button id="rdread" aria-label="Mark as read" data-tip="Mark as read"></button>
     <button id="rdclose" aria-label="Close reader" data-tip="Close"></button>
   </div>
+  <div class="rdtools">
+    <button class="rdmode" data-mode="select" aria-label="Select text" data-tip="Select text"></button>
+    <button class="rdmode" data-mode="highlight" aria-label="Highlight" data-tip="Highlight"></button>
+    <button class="rdmode" data-mode="draw" aria-label="Draw" data-tip="Draw with the pen"></button>
+    <button class="rdmode" data-mode="erase" aria-label="Erase" data-tip="Erase — tap a mark"></button>
+    <span id="rddrawopts" class="rddrawopts" hidden>
+      <span class="rdsep"></span>
+      <button class="inkcolor" data-color="#e53935" style="background:#e53935" aria-label="Red"></button>
+      <button class="inkcolor" data-color="#1e88e5" style="background:#1e88e5" aria-label="Blue"></button>
+      <button class="inkcolor" data-color="#111111" style="background:#111111" aria-label="Black"></button>
+      <button class="inkwidth" data-width="2" data-tip="Thin"><span style="width:3px;height:3px"></span></button>
+      <button class="inkwidth" data-width="4" data-tip="Medium"><span style="width:6px;height:6px"></span></button>
+      <button class="inkwidth" data-width="7" data-tip="Thick"><span style="width:10px;height:10px"></span></button>
+      <button id="inkundo" aria-label="Undo stroke" data-tip="Undo last stroke"></button>
+    </span>
+  </div>
   <div class="rdbody">
     <div id="rddoc"><div id="rdstatus" class="note">Loading…</div></div>
     <aside id="rdnotepane">
@@ -917,6 +964,10 @@ const ICONS = {
   bookmark: '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>',
   maximize: '<path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/>',
   minimize: '<path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/>',
+  'mouse-pointer': '<path d="m3 3 7.07 16.97 2.51-7.39 7.39-2.51z"/><path d="m13 13 6 6"/>',
+  highlighter: '<path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/>',
+  'pen-line': '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  eraser: '<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>',
   'file-up': '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M12 12v6"/><path d="m15 15-3-3-3 3"/>',
   'trash-2': '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>',
   'folder-input':
@@ -982,6 +1033,11 @@ function paintStaticIcons() {
   map['#rdnotes'] = 'pencil';
   map['#rdfull'] = 'maximize';
   map['#rdread'] = 'check';
+  map['.rdmode[data-mode="select"]'] = 'mouse-pointer';
+  map['.rdmode[data-mode="highlight"]'] = 'highlighter';
+  map['.rdmode[data-mode="draw"]'] = 'pen-line';
+  map['.rdmode[data-mode="erase"]'] = 'eraser';
+  map['#inkundo'] = 'rotate-ccw';
   for (const [sel, name] of Object.entries(map)) {
     const el = document.querySelector(sel);
     if (el) el.innerHTML = icon(name);
@@ -1054,6 +1110,7 @@ let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               filing: null, processedPapers: [], rejectedPapers: [],
               readingPapers: [], readStates: new Set(['unread', 'reading', 'read']),
               searchScope: 'view', corpus: null, annotations: [], hlRange: null,
+              readerMode: 'highlight', inkColor: '#e53935', inkWidth: 3,
               undoStack: [] };
 
 // Capabilities this page expects the server to have.
@@ -2960,7 +3017,9 @@ async function openReader(paper) {
     const r = await api(`/api/papers/${encodeURIComponent(paper.key)}/annotations`);
     state.annotations = r.annotations || [];
   } catch (e) { /* highlights just won't show */ }
-  renderHighlightList();
+  renderAnnotationList();
+  setReaderMode('highlight');
+  updateInkOpts();
   // First-time nudge: the highlight gesture is select-first, with no button.
   try { $('#rdhint').hidden = localStorage.getItem(HL_HINT_KEY) === '1'; }
   catch (e) { $('#rdhint').hidden = false; }
@@ -3074,6 +3133,13 @@ async function renderPage(placeholder, scale) {
     wrap.appendChild(hlEl);
     paintPageHighlights(hlEl, n);
 
+    const inkEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    inkEl.setAttribute('class', 'rdink');
+    inkEl.setAttribute('viewBox', '0 0 100 100');
+    inkEl.setAttribute('preserveAspectRatio', 'none');
+    wrap.appendChild(inkEl);
+    paintPageInk(inkEl, n);
+
     const textEl = document.createElement('div');
     textEl.className = 'rdtext';
     textEl.style.setProperty('--scale-factor', String(scale));
@@ -3108,10 +3174,12 @@ function evictPage(wrap, w, h) {
 
 // ---------- highlights ----------
 
+const SVGNS = 'http://www.w3.org/2000/svg';
+
 function paintPageHighlights(hlEl, page) {
   hlEl.replaceChildren();
   for (const a of state.annotations) {
-    if (a.page !== page) continue;
+    if (a.type === 'ink' || a.page !== page) continue;   // ink is drawn separately
     for (const [x, y, w, h] of a.rects || []) {
       const r = document.createElement('div');
       r.className = 'rdhlrect';
@@ -3122,10 +3190,38 @@ function paintPageHighlights(hlEl, page) {
   }
 }
 
-function repaintHighlights() {
+// Ink strokes as SVG polylines. Points are normalized 0..1 and plotted into a
+// 0..100 viewBox stretched to the page, so they scale with zoom; a non-scaling
+// stroke keeps the line a constant width on screen.
+function paintPageInk(svg, page) {
+  svg.replaceChildren();
+  const erasing = state.readerMode === 'erase';
+  for (const a of state.annotations) {
+    if (a.type !== 'ink' || a.page !== page) continue;
+    const poly = document.createElementNS(SVGNS, 'polyline');
+    poly.setAttribute('fill', 'none');
+    poly.setAttribute('stroke', a.color);
+    poly.setAttribute('stroke-width', a.width);
+    poly.setAttribute('stroke-linecap', 'round');
+    poly.setAttribute('stroke-linejoin', 'round');
+    poly.setAttribute('vector-effect', 'non-scaling-stroke');
+    poly.setAttribute('points', a.points.map(([x, y]) => `${x * 100},${y * 100}`).join(' '));
+    if (erasing) {
+      poly.style.pointerEvents = 'stroke';
+      poly.style.cursor = 'pointer';
+      poly.addEventListener('pointerdown', e => { e.stopPropagation(); deleteAnnotation(a.id); });
+    }
+    svg.appendChild(poly);
+  }
+}
+
+function repaintAnnotations() {
   for (const wrap of $('#rddoc').querySelectorAll('.rdpagewrap')) {
+    const page = Number(wrap.dataset.page);
     const hl = wrap.querySelector('.rdhl');
-    if (hl) paintPageHighlights(hl, Number(wrap.dataset.page));
+    if (hl) paintPageHighlights(hl, page);
+    const ink = wrap.querySelector('.rdink');
+    if (ink) paintPageInk(ink, page);
   }
 }
 
@@ -3175,7 +3271,7 @@ function createHighlight(color) {
   for (const [wrap, rects] of byPage) {
     state.annotations.push({
       id: 'h' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-      page: Number(wrap.dataset.page),
+      type: 'highlight', page: Number(wrap.dataset.page),
       rects, color, quote,
     });
   }
@@ -3184,15 +3280,15 @@ function createHighlight(color) {
   $('#rdhltools').hidden = true;
   dismissHlHint();   // they've found it
   saveAnnotations();
-  repaintHighlights();
-  renderHighlightList();
+  repaintAnnotations();
+  renderAnnotationList();
 }
 
-function deleteHighlight(id) {
+function deleteAnnotation(id) {
   state.annotations = state.annotations.filter(a => a.id !== id);
   saveAnnotations();
-  repaintHighlights();
-  renderHighlightList();
+  repaintAnnotations();
+  renderAnnotationList();
 }
 
 const HL_HINT_KEY = 'rs.hlhint.seen';
@@ -3202,22 +3298,23 @@ function dismissHlHint() {
 }
 $('#rdhintclose').addEventListener('click', dismissHlHint);
 
-function renderHighlightList() {
+function renderAnnotationList() {
   const list = $('#rdhllist');
   $('#rdhlhint').hidden = state.annotations.length > 0;
   list.replaceChildren(...state.annotations.map(a => {
     const row = document.createElement('div');
     row.className = 'hlitem';
+    const label = a.type === 'ink' ? `Drawing · p.${a.page}` : (a.quote || '(no text)');
     row.innerHTML =
       `<span class="hldot" style="background:${a.color}"></span>` +
-      `<span class="hlquote">${esc(a.quote || '(no text)')}</span>` +
-      `<button class="hldel" aria-label="Delete highlight">${icon('trash-2')}</button>`;
+      `<span class="hlquote">${esc(label)}</span>` +
+      `<button class="hldel" aria-label="Delete annotation">${icon('trash-2')}</button>`;
     row.querySelector('.hlquote').addEventListener('click', () => {
       const wrap = [...$('#rddoc').querySelectorAll('.rdpagewrap')]
         .find(x => Number(x.dataset.page) === a.page);
       wrap?.scrollIntoView({block: 'center'});
     });
-    row.querySelector('.hldel').addEventListener('click', () => deleteHighlight(a.id));
+    row.querySelector('.hldel').addEventListener('click', () => deleteAnnotation(a.id));
     return row;
   }));
 }
@@ -3231,7 +3328,8 @@ function scheduleHlTools() {
 function updateHlTools() {
   const tools = $('#rdhltools');
   const sel = window.getSelection();
-  if ($('#reader').hidden || !sel || sel.isCollapsed || !sel.rangeCount) {
+  if ($('#reader').hidden || state.readerMode !== 'highlight'
+      || !sel || sel.isCollapsed || !sel.rangeCount) {
     tools.hidden = true; state.hlRange = null; return;
   }
   const range = sel.getRangeAt(0);
@@ -3253,6 +3351,100 @@ document.addEventListener('selectionchange', scheduleHlTools);
 $('#rdhltools').addEventListener('mousedown', e => e.preventDefault());
 for (const b of document.querySelectorAll('#rdhltools .hlcolor'))
   b.addEventListener('click', () => createHighlight(b.dataset.color));
+
+// ---------- reader modes: select / highlight / draw / erase ----------
+
+function setReaderMode(mode) {
+  state.readerMode = mode;
+  for (const b of document.querySelectorAll('.rdmode'))
+    b.setAttribute('aria-pressed', String(b.dataset.mode === mode));
+  const reader = $('#reader');
+  reader.classList.remove('mode-select', 'mode-highlight', 'mode-draw', 'mode-erase');
+  reader.classList.add('mode-' + mode);
+  $('#rddrawopts').hidden = mode !== 'draw';
+  if (mode !== 'highlight') { $('#rdhltools').hidden = true; state.hlRange = null; }
+  repaintAnnotations();   // erase toggles whether strokes are tappable
+}
+
+// ---------- freehand drawing ----------
+// Pen (or mouse) draws; a finger scrolls -- exactly what the stylus is for.
+let drawing = null;
+const SVG = 'http://www.w3.org/2000/svg';
+
+function drawPoint(e) {
+  const {box, points, poly} = drawing;
+  const x = Math.min(1, Math.max(0, (e.clientX - box.left) / box.width));
+  const y = Math.min(1, Math.max(0, (e.clientY - box.top) / box.height));
+  points.push([x, y]);
+  poly.setAttribute('points', points.map(([px, py]) => `${px * 100},${py * 100}`).join(' '));
+}
+
+$('#rddoc').addEventListener('pointerdown', e => {
+  // A resting palm (touch) while the pen draws must not scroll.
+  if (drawing && e.pointerType === 'touch') { e.preventDefault(); return; }
+  if (state.readerMode !== 'draw' || e.pointerType === 'touch') return;
+  const wrap = pageWrapAt(e.clientX, e.clientY);
+  const svg = wrap?.querySelector('.rdink');
+  if (!svg) return;
+  e.preventDefault();
+  const poly = document.createElementNS(SVG, 'polyline');
+  poly.setAttribute('fill', 'none');
+  poly.setAttribute('stroke', state.inkColor);
+  poly.setAttribute('stroke-width', state.inkWidth);
+  poly.setAttribute('stroke-linecap', 'round');
+  poly.setAttribute('stroke-linejoin', 'round');
+  poly.setAttribute('vector-effect', 'non-scaling-stroke');
+  svg.appendChild(poly);
+  drawing = {page: Number(wrap.dataset.page), poly, points: [], box: wrap.getBoundingClientRect()};
+  drawPoint(e);
+  $('#rddoc').setPointerCapture?.(e.pointerId);
+});
+
+$('#rddoc').addEventListener('pointermove', e => {
+  if (!drawing || e.pointerType === 'touch') return;
+  e.preventDefault();
+  drawPoint(e);
+});
+
+function endStroke() {
+  if (!drawing) return;
+  const {page, points} = drawing;
+  drawing = null;
+  if (points.length < 2) { repaintAnnotations(); return; }   // a stray dot
+  state.annotations.push({
+    id: 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    type: 'ink', page, points, color: state.inkColor, width: state.inkWidth,
+  });
+  saveAnnotations();
+  renderAnnotationList();
+}
+$('#rddoc').addEventListener('pointerup', endStroke);
+$('#rddoc').addEventListener('pointercancel', endStroke);
+
+function inkUndo() {
+  for (let i = state.annotations.length - 1; i >= 0; i--) {
+    if (state.annotations[i].type === 'ink') { state.annotations.splice(i, 1); break; }
+  }
+  saveAnnotations();
+  repaintAnnotations();
+  renderAnnotationList();
+}
+
+// ---------- toolbar wiring ----------
+for (const b of document.querySelectorAll('.rdmode'))
+  b.addEventListener('click', () => setReaderMode(b.dataset.mode));
+for (const b of document.querySelectorAll('.inkcolor'))
+  b.addEventListener('click', () => { state.inkColor = b.dataset.color; updateInkOpts(); });
+for (const b of document.querySelectorAll('.inkwidth'))
+  b.addEventListener('click', () => { state.inkWidth = Number(b.dataset.width); updateInkOpts(); });
+$('#inkundo').addEventListener('click', inkUndo);
+
+function updateInkOpts() {
+  for (const b of document.querySelectorAll('.inkcolor'))
+    b.setAttribute('aria-pressed', String(b.dataset.color === state.inkColor));
+  for (const b of document.querySelectorAll('.inkwidth'))
+    b.setAttribute('aria-pressed', String(Number(b.dataset.width) === state.inkWidth));
+}
 
 function closeReader() {
   // Leave full screen with the reader, or the empty view stays full-screen.

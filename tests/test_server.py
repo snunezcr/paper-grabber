@@ -49,8 +49,9 @@ def test_index_is_served(client):
 
 def test_index_has_no_external_resources(client):
     # A CDN reference would break on a flaky tablet connection and violate the
-    # self-contained requirement.
-    body = client.get("/").text
+    # self-contained requirement. The SVG XML namespace is a standard identifier,
+    # never fetched, so it doesn't count.
+    body = client.get("/").text.replace("http://www.w3.org/2000/svg", "")
     for marker in ("http://", "https://cdn", "//unpkg", "//cdnjs"):
         assert marker not in body
 
@@ -2067,3 +2068,18 @@ def test_reader_has_highlighting(client):
     assert "/annotations`" in body
     # Highlight quotes feed recall.
     assert "(p.annotations || []).map(a => `${a.quote || ''} ${a.comment || ''}`)" in body
+
+
+def test_reader_has_drawing_and_modes(client):
+    body = client.get("/").text
+    # Mode toolbar: select / highlight / draw / erase.
+    for mode in ("select", "highlight", "draw", "erase"):
+        assert f'data-mode="{mode}"' in body
+    assert "function setReaderMode" in body
+    # Pen (or mouse) draws, a finger scrolls; strokes are type:'ink'.
+    assert "if (state.readerMode !== 'draw' || e.pointerType === 'touch') return;" in body
+    assert "type: 'ink', page, points, color: state.inkColor, width: state.inkWidth," in body
+    # Ink renders as SVG polylines; highlights carry an explicit type now.
+    assert "function paintPageInk" in body
+    assert "type: 'highlight', page:" in body
+    assert "function inkUndo" in body

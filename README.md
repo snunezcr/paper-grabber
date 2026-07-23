@@ -45,6 +45,9 @@ metadata APIs it queries and the Drive folder you pick.
 - **Highlighting** in the reader: select text to highlight it; highlights are
   stored per paper, their quotes join Library recall, and they mirror onto the
   Drive file's metadata (appProperties) so they travel with it.
+- **Drawing** with the pen: a Select / Highlight / Draw / Erase toolbar; in Draw
+  mode the stylus inks and a finger still scrolls. Ink is stored and mirrored
+  like highlights, and scales with zoom.
 
 ## Requirements
 
@@ -150,7 +153,7 @@ anything that matters:
 ## Development
 
 ```bash
-pytest                       # 771 tests, no network required
+pytest                       # 772 tests, no network required
 ./scripts/demo.sh            # drive the pipeline against bundled fixtures
 ```
 
