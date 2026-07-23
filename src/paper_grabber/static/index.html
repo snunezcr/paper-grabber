@@ -519,9 +519,11 @@
   .rdtext {
     position: absolute; inset: 0; z-index: 2; overflow: clip; line-height: 1;
     text-align: initial; transform-origin: 0 0; forced-color-adjust: none;
+    -webkit-user-select: text; user-select: text; cursor: text;
   }
   .rdtext span, .rdtext br {
     position: absolute; white-space: pre; color: transparent; transform-origin: 0 0;
+    -webkit-user-select: text; user-select: text; cursor: text;
   }
   .rdtext ::selection { background: rgba(120,160,230,.4); }
   /* Floating colour picker shown while text is selected. */
@@ -534,6 +536,21 @@
   .hlcolor {
     width: 30px; height: 30px; border-radius: 50%; cursor: pointer;
     border: 1px solid rgba(0,0,0,.25);
+  }
+  /* One-time hint that the reader can highlight -- the gesture is select-first,
+     so it has no button of its own. */
+  #rdhint {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    bottom: calc(1rem + env(safe-area-inset-bottom)); z-index: 25;
+    display: flex; align-items: center; gap: .3rem;
+    background: var(--ink); color: var(--bg); font-size: .85rem;
+    padding: .45rem .45rem .45rem .9rem; border-radius: 999px;
+    box-shadow: 0 4px 14px rgba(0,0,0,.3);
+  }
+  #rdhint[hidden] { display: none; }
+  #rdhint button {
+    background: none; border: 0; color: var(--bg); cursor: pointer;
+    width: 26px; height: 26px; font-size: 1.1rem; line-height: 1;
   }
   /* Highlights list in the notes pane. */
   #rdhllist { display: flex; flex-direction: column; gap: .4rem; }
@@ -824,9 +841,14 @@
       <textarea id="rdnote" placeholder="Why this paper matters, what to read first…"></textarea>
       <p class="notehint" id="rdnotehint">Saved to the file's description in Drive.</p>
       <button id="rdnotesave">Save</button>
-      <div class="shlabel" id="rdhllabel" hidden>Highlights</div>
+      <div class="shlabel">Highlights</div>
+      <p class="notehint" id="rdhlhint">Select text in the page to highlight it.</p>
       <div id="rdhllist"></div>
     </aside>
+  </div>
+  <div id="rdhint" hidden>
+    <span>Select text in the page to highlight it.</span>
+    <button id="rdhintclose" aria-label="Dismiss">&times;</button>
   </div>
   <div id="rdhltools" hidden aria-label="Highlight">
     <button class="hlcolor" data-color="#ffd54a" style="background:#ffd54a" aria-label="Highlight yellow"></button>
@@ -2928,6 +2950,9 @@ async function openReader(paper) {
     state.annotations = r.annotations || [];
   } catch (e) { /* highlights just won't show */ }
   renderHighlightList();
+  // First-time nudge: the highlight gesture is select-first, with no button.
+  try { $('#rdhint').hidden = localStorage.getItem(HL_HINT_KEY) === '1'; }
+  catch (e) { $('#rdhint').hidden = false; }
 
   try {
     const lib = await loadPdfjs();
@@ -3036,7 +3061,7 @@ async function renderPage(placeholder, scale) {
 
     const textEl = document.createElement('div');
     textEl.className = 'rdtext';
-    textEl.style.setProperty('--scale-factor', scale);
+    textEl.style.setProperty('--scale-factor', String(scale));
     wrap.appendChild(textEl);
 
     placeholder.replaceWith(wrap);
@@ -3140,6 +3165,7 @@ function createHighlight(color) {
   }
   sel.removeAllRanges();
   $('#rdhltools').hidden = true;
+  dismissHlHint();   // they've found it
   saveAnnotations();
   repaintHighlights();
   renderHighlightList();
@@ -3152,9 +3178,16 @@ function deleteHighlight(id) {
   renderHighlightList();
 }
 
+const HL_HINT_KEY = 'rs.hlhint.seen';
+function dismissHlHint() {
+  $('#rdhint').hidden = true;
+  try { localStorage.setItem(HL_HINT_KEY, '1'); } catch (e) {}
+}
+$('#rdhintclose').addEventListener('click', dismissHlHint);
+
 function renderHighlightList() {
   const list = $('#rdhllist');
-  $('#rdhllabel').hidden = state.annotations.length === 0;
+  $('#rdhlhint').hidden = state.annotations.length > 0;
   list.replaceChildren(...state.annotations.map(a => {
     const row = document.createElement('div');
     row.className = 'hlitem';
