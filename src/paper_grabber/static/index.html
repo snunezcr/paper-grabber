@@ -857,7 +857,8 @@ let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               query: '', suggestions: {}, notePaper: null, panelMode: null,
               readerPaper: null, authSignedIn: false,
               alertStats: {}, alertSort: 'pending',
-              filing: null, processedPapers: [], rejectedPapers: [] };
+              filing: null, processedPapers: [], rejectedPapers: [],
+              undoStack: [] };
 
 // Capabilities this page expects the server to have.
 const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf'];
@@ -1045,9 +1046,10 @@ async function commitDecision(card, paper, decision, {fling = 0} = {}) {
       renderAlertFilter();
     }, fling ? 220 : 180);
     // Reversing a decision must be one tap: a mis-tap is easy on a tablet, and
-    // a rejected paper is suppressed on every future sync -- invisible forever.
-    state.lastUndo = paper;
-    $('#undo').hidden = false;
+    // a dropped paper is suppressed on every future sync -- invisible forever.
+    // The stack goes deep because swiping is fast: a rushed run of five
+    // decisions must be walkable back one at a time, not just the last.
+    pushUndo({scope: 'triage', paper});
     loadFiling();
   } catch (e) {
     card.classList.remove('going', 'flinging');
@@ -1061,42 +1063,68 @@ function decide(card, paper, decision) {
   commitDecision(card, paper, decision);
 }
 
-$('#undo').addEventListener('click', async () => {
-  const pending = state.lastUndo;
-  if (!pending) return;
+// A stack of reversible decisions. Triage entries undo on the triage tab, bulk
+// drops from Filing on the filing tab; the pill shows the count for whichever
+// tab you're on and pops one entry per press.
+const UNDO_MAX = 25;
 
-  // A bulk rejection from Filing restores several papers at once.
-  if (pending.keys) {
-    try {
-      const data = await api('/api/decisions', {
+function undoScope() {
+  return state.tab === 'triage' ? 'triage'
+    : state.tab === 'filing' ? 'filing' : null;
+}
+
+function pushUndo(entry) {
+  state.undoStack.push(entry);
+  if (state.undoStack.length > UNDO_MAX) state.undoStack.shift();
+  refreshUndo();
+}
+
+function refreshUndo() {
+  const scope = undoScope();
+  const n = scope ? state.undoStack.filter(e => e.scope === scope).length : 0;
+  const btn = $('#undo');
+  btn.hidden = n === 0;
+  btn.textContent = n > 1 ? `Undo (${n})` : 'Undo';
+}
+
+async function popUndo() {
+  const scope = undoScope();
+  if (!scope) return;
+  // The most recent entry for this tab -- LIFO, so a rushed run walks back in
+  // the order it was made.
+  let i = state.undoStack.length - 1;
+  while (i >= 0 && state.undoStack[i].scope !== scope) i--;
+  if (i < 0) return;
+  const entry = state.undoStack[i];
+
+  try {
+    if (entry.scope === 'triage') {
+      const data = await api(`/api/papers/${encodeURIComponent(entry.paper.key)}/decision`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({keys: pending.keys, decision: pending.decision})
+        body: JSON.stringify({decision: 'pending'})
       });
       showCounts(data.counts);
-      state.lastUndo = null;
-      $('#undo').hidden = true;
+      state.pending = [entry.paper, ...(state.pending || [])];
+      $('#empty').hidden = true;
+      // Re-render rather than prepend: an undone paper may belong to a filter
+      // that is not currently showing.
+      renderTriage();
       loadFiling();
-    } catch (e) { showError(`Could not undo: ${e.message}`); }
-    return;
-  }
-
-  const paper = pending;
-  try {
-    const data = await api(`/api/papers/${encodeURIComponent(paper.key)}/decision`, {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({decision: 'pending'})
-    });
-    showCounts(data.counts);
-    state.pending = [paper, ...(state.pending || [])];
-    $('#empty').hidden = true;
-    // Re-render rather than prepend: an undone paper may belong to a filter
-    // that is not currently showing.
-    renderTriage();
-    state.lastUndo = null;
-    $('#undo').hidden = true;
-    loadFiling();
+    } else {
+      // A bulk drop from Filing restores several papers to accepted at once.
+      const data = await api('/api/decisions', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({keys: entry.keys, decision: 'accepted'})
+      });
+      showCounts(data.counts);
+      loadFiling();
+    }
+    state.undoStack.splice(i, 1);
+    refreshUndo();
   } catch (e) { showError(`Could not undo: ${e.message}`); }
-});
+}
+
+$('#undo').addEventListener('click', popUndo);
 
 // ---------- swipe to triage ----------
 // Right keeps, left skips. Vertical drags are left to the browser to scroll
@@ -2042,9 +2070,7 @@ $('#selreject').addEventListener('click', async () => {
     state.selected.clear();
     // Dropped papers are suppressed on every future check, so a mis-tap here
     // would bury them silently. One tap puts them back.
-    state.lastUndo = {keys: data.updated, decision: 'accepted',
-                      label: `${data.updated.length} dropped`};
-    $('#undo').hidden = false;
+    pushUndo({scope: 'filing', keys: data.updated});
     showNotice(`${data.updated.length} dropped`);
     loadFiling();
   } catch (e) { showError(`Could not drop: ${e.message}`); }
@@ -2169,9 +2195,9 @@ function selectTab(tab) {
   // is selected while it is showing.
   $('#view-rejected').hidden = tab !== 'rejected';
   $('#rejectedbtn').setAttribute('aria-pressed', String(tab === 'rejected'));
-  // Undo follows whichever view produced it.
-  $('#undo').hidden = !state.lastUndo
-    || (state.lastUndo.keys ? tab !== 'filing' : tab !== 'triage');
+  // Undo follows whichever view produced it -- triage decisions on triage,
+  // bulk drops on filing -- so the pill shows the count for this tab.
+  refreshUndo();
   syncSidebarVisibility();
   refreshFileBar();
   // Triage data is resident, so just re-render it (which refreshes the sidebar

@@ -1009,10 +1009,23 @@ def test_reject_button_uses_the_palette_reject_colour(client):
 
 
 def test_bulk_rejection_offers_an_undo(client):
-    # Rejected papers are suppressed on every future check; a mis-tap here
+    # Dropped papers are suppressed on every future check; a mis-tap here
     # would bury them silently.
     body = client.get("/").text
-    assert "state.lastUndo = {keys:" in body
+    assert "pushUndo({scope: 'filing', keys: data.updated});" in body
+
+
+def test_undo_is_a_multi_level_stack(client):
+    # Swiping is fast, so a rushed run of decisions must walk back one at a
+    # time, not just the last -- a bounded LIFO stack, scoped to the tab.
+    body = client.get("/").text
+    assert "function pushUndo" in body
+    assert "function popUndo" in body
+    assert "const UNDO_MAX = 25;" in body
+    # A single triage decision pushes onto the stack, not a lone slot.
+    assert "pushUndo({scope: 'triage', paper});" in body
+    # The pill shows how many steps are undoable on this tab.
+    assert "n > 1 ? `Undo (${n})` : 'Undo'" in body
 
 
 # --- rejected view and recovery -----------------------------------------------
