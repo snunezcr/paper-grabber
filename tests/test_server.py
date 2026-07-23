@@ -1912,3 +1912,16 @@ def test_reading_view_and_controls_present(client):
     assert "id=\"rdread\"" in body
     # The badge follows the unread count.
     assert "$('#badge-reading').textContent = c.unread || 0;" in body
+
+
+def test_reading_tab_has_a_read_state_filter(client):
+    body = client.get("/").text
+    # A sidebar group, hidden except on the Reading tab, with the three states.
+    assert 'id="fg-readstate"' in body
+    assert 'data-state="unread"' in body
+    assert 'data-state="reading"' in body
+    assert 'data-state="read"' in body
+    assert "$('#fg-readstate').hidden = state.tab !== 'reading';" in body
+    # The list is filtered by the chosen states, on top of search + alerts.
+    assert "passesFilters(raw).filter(p => state.readStates.has(p.read_state))" in body
+    assert "function renderReadStateFilter" in body

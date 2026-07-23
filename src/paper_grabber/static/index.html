@@ -644,6 +644,18 @@
     <div id="qcount" class="qcount" hidden></div>
   </div>
 
+  <details class="fgroup" id="fg-readstate" open hidden>
+    <summary>Reading <span class="sel" id="readsel">All</span></summary>
+    <div class="options">
+      <label class="opt"><input type="checkbox" data-state="unread" checked>
+        <span class="label">Unread</span><span class="n" id="rn-unread"></span></label>
+      <label class="opt"><input type="checkbox" data-state="reading" checked>
+        <span class="label">Reading</span><span class="n" id="rn-reading"></span></label>
+      <label class="opt"><input type="checkbox" data-state="read" checked>
+        <span class="label">Read</span><span class="n" id="rn-read"></span></label>
+    </div>
+  </details>
+
   <details class="fgroup" id="fg-alerts" open>
     <summary>Alerts <span class="sel" id="alertsel">All</span></summary>
     <div class="options">
@@ -927,7 +939,8 @@ let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               readerPaper: null, authSignedIn: false,
               alertStats: {}, alertSort: 'pending',
               filing: null, processedPapers: [], rejectedPapers: [],
-              readingPapers: [], undoStack: [] };
+              readingPapers: [], readStates: new Set(['unread', 'reading', 'read']),
+              undoStack: [] };
 
 // Capabilities this page expects the server to have.
 const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf', 'reading'];
@@ -2082,10 +2095,30 @@ async function loadReading() {
   } catch (e) { showError(`Could not load the reading list: ${e.message}`); }
 }
 
+// The read-state filter lives in the sidebar and applies only here. Its
+// per-state counts reflect the search and alert filters, so it always shows
+// how many papers each state actually holds right now.
+function renderReadStateFilter() {
+  const group = $('#fg-readstate');
+  group.hidden = state.tab !== 'reading';
+  if (group.hidden) return;
+  const afterSearch = passesFilters(state.readingPapers || []);
+  const per = {unread: 0, reading: 0, read: 0};
+  for (const p of afterSearch) if (p.read_state in per) per[p.read_state]++;
+  for (const s of ['unread', 'reading', 'read']) {
+    $(`#rn-${s}`).textContent = per[s];
+    group.querySelector(`input[data-state="${s}"]`).checked = state.readStates.has(s);
+  }
+  const chosen = state.readStates.size;
+  $('#readsel').textContent = chosen === 3 ? 'All' : chosen === 0 ? 'None' : `${chosen} of 3`;
+}
+
 function renderReading() {
   renderAlertFilter();
+  renderReadStateFilter();
   const raw = state.readingPapers || [];
-  const shown = passesFilters(raw);
+  // Search and alerts, then the read-state filter on top.
+  const shown = passesFilters(raw).filter(p => state.readStates.has(p.read_state));
   const inprogress = shown.filter(p => p.read_state === 'reading');
   // Newest-kept order comes from the server; a stable sort floats pins to the
   // top of the queue without disturbing the rest.
@@ -2817,6 +2850,14 @@ $('#alertsort').addEventListener('click', () => {
   renderAlertFilter();
 });
 
+$('#fg-readstate').querySelectorAll('input[data-state]').forEach(box => {
+  box.addEventListener('change', () => {
+    box.checked ? state.readStates.add(box.dataset.state)
+                : state.readStates.delete(box.dataset.state);
+    renderReading();
+  });
+});
+
 const sidebar = $('#sidebar');
 const filterToggle = $('#filtertoggle');
 const COLLAPSE_KEY = 'rs.sidebar.collapsed';
@@ -2889,6 +2930,8 @@ function syncSidebarVisibility() {
   const relevant = ['triage', 'reading', 'filing', 'processed', 'rejected'].includes(state.tab);
   sidebar.style.display = relevant ? '' : 'none';
   filterToggle.style.display = relevant ? '' : 'none';
+  // The read-state filter belongs to the Reading tab alone.
+  $('#fg-readstate').hidden = state.tab !== 'reading';
   if (!relevant) setDrawer(false);
   updateFilterToggle();
 }
