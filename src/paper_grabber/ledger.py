@@ -109,6 +109,24 @@ def _scholar_pdf_url(url: str | None) -> bool:
     return lowered.endswith(".pdf") or "/pdf/" in lowered or "arxiv.org/abs/" in lowered
 
 
+def can_read(p: LedgerPaper) -> bool:
+    """Whether there is a PDF to open: a copy we hold, or somewhere to fetch one.
+
+    Defined once so the reading queue and the card agree. A paper that cannot be
+    opened is not something you can read, so it stays out of the reading list --
+    which is the nudge to go get the file.
+    """
+    d = p.payload
+    e = d.get("enrichment") or {}
+    return bool(
+        p.drive_file_id
+        or p.staged_name
+        or e.get("pdf_candidates")
+        or e.get("pdf_url")
+        or _scholar_pdf_url(d.get("url"))
+    )
+
+
 def paper_view(p: LedgerPaper) -> dict[str, Any]:
     """Flatten a ledger row into the fields every consumer wants.
 
@@ -161,12 +179,7 @@ def paper_view(p: LedgerPaper) -> dict[str, Any]:
         # Whether the reader can show it: a copy we hold, or somewhere to
         # fetch one from. has_pdf is not enough -- Scholar's [PDF] badge often
         # points at a landing page.
-        "can_read": bool(
-            p.drive_file_id
-            or p.staged_name
-            or (e.get("pdf_candidates") or e.get("pdf_url"))
-            or _scholar_pdf_url(d.get("url"))
-        ),
+        "can_read": can_read(p),
         "uploaded_at": p.uploaded_at,
         # The reading axis: unread until you open it, reading once you do, read
         # when you say so. Pinned floats it to the top of the queue.
@@ -382,11 +395,13 @@ class Ledger:
         return [self._row(r) for r in rows]
 
     def reading(self) -> list[LedgerPaper]:
-        """Every kept paper, across filing states, newest decision first.
+        """Kept papers you can actually open, newest decision first.
 
-        The reading queue spans the whole accepted set -- unfiled, filed, and
-        already in Drive -- because whether a paper is read has nothing to do
-        with whether its PDF has been archived.
+        Spans the whole accepted set -- unfiled, filed, and already in Drive --
+        because whether a paper is read has nothing to do with whether its PDF
+        has been archived. But a paper with no PDF to open is not something you
+        can read, so it waits in Filing until it has a file rather than sitting
+        unreadable in the queue.
         """
         rows = self._db.execute(
             "SELECT key, title, payload, decision, first_seen, decided_at,"
@@ -395,7 +410,7 @@ class Ledger:
             " FROM papers WHERE decision = ? ORDER BY decided_at DESC",
             (Decision.ACCEPTED.value,),
         ).fetchall()
-        return [self._row(r) for r in rows]
+        return [p for p in (self._row(r) for r in rows) if can_read(p)]
 
     def set_read_state(self, key: str, state: str) -> bool:
         """Move a paper along the reading axis: unread, reading, or read."""
@@ -519,13 +534,12 @@ class Ledger:
         counts["processed"] = self._db.execute(
             "SELECT COUNT(*) FROM papers WHERE drive_file_id IS NOT NULL"
         ).fetchone()[0]
-        # The reading queue's depth: kept papers not yet read (NULL predates the
-        # column and reads as unread).
-        counts["unread"] = self._db.execute(
-            "SELECT COUNT(*) FROM papers WHERE decision = ?"
-            " AND (read_state IS NULL OR read_state = 'unread')",
-            (Decision.ACCEPTED.value,),
-        ).fetchone()[0]
+        # The reading queue's depth: readable kept papers not yet read. Counted
+        # through reading() so "has a PDF" stays defined in exactly one place,
+        # matching what the Reading tab actually shows.
+        counts["unread"] = sum(
+            1 for p in self.reading() if (p.read_state or "unread") == "unread"
+        )
         return counts
 
     def alert_stats(self) -> dict[str, dict[str, int]]:

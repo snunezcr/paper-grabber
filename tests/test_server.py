@@ -1856,7 +1856,7 @@ def test_no_folder_suggestion_without_a_pdf(client):
 
 def test_reading_endpoint_lists_kept_papers_with_state(seeded):
     with Ledger(seeded) as led:
-        led.record(AlertPaper(title="Keeper", year=2026))
+        led.record(AlertPaper(title="Keeper", year=2026, url="https://arxiv.org/abs/2601.2"))
         led.decide("Keeper", Decision.ACCEPTED)
     c = TestClient(create_app(seeded))
     data = c.get("/api/reading").json()
@@ -1868,7 +1868,7 @@ def test_reading_endpoint_lists_kept_papers_with_state(seeded):
 
 def test_read_state_endpoint_updates(seeded):
     with Ledger(seeded) as led:
-        led.record(AlertPaper(title="Keeper", year=2026))
+        led.record(AlertPaper(title="Keeper", year=2026, url="https://arxiv.org/abs/2601.2"))
         led.decide("Keeper", Decision.ACCEPTED)
         key = [p.key for p in led.reading() if p.title == "Keeper"][0]
     c = TestClient(create_app(seeded))
@@ -1892,7 +1892,7 @@ def test_read_state_endpoint_404_for_unknown_paper(seeded):
 
 def test_pin_endpoint_toggles(seeded):
     with Ledger(seeded) as led:
-        led.record(AlertPaper(title="Keeper", year=2026))
+        led.record(AlertPaper(title="Keeper", year=2026, url="https://arxiv.org/abs/2601.2"))
         led.decide("Keeper", Decision.ACCEPTED)
         key = [p.key for p in led.reading() if p.title == "Keeper"][0]
     c = TestClient(create_app(seeded))

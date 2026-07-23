@@ -94,7 +94,8 @@ def test_payload_round_trips(ledger):
 
 
 def test_counts_by_decision(ledger):
-    ledger.record(paper(title="A"))
+    # A is readable, so it counts toward the reading queue's unread depth.
+    ledger.record(paper(title="A", url="https://arxiv.org/abs/2601.1"))
     ledger.record(paper(title="B"))
     ledger.record(paper(title="C"))
     ledger.decide("A", Decision.ACCEPTED)
@@ -528,15 +529,29 @@ def test_alert_stats_still_counts_accepted_after_upload(ledger):
 # --- reading state ------------------------------------------------------------
 
 
+# The reading queue only holds papers with a PDF to open, so these keep a
+# fetchable arXiv link.
+READABLE = "https://arxiv.org/abs/2601.00001"
+
+
 def test_kept_paper_starts_unread(ledger):
-    ledger.record(paper(title="A", alert_query="cs.AI"))
+    ledger.record(paper(title="A", alert_query="cs.AI", url=READABLE))
     ledger.decide("A", Decision.ACCEPTED)
     r = ledger.reading()
     assert len(r) == 1 and (r[0].read_state or "unread") == "unread"
 
 
+def test_a_kept_paper_with_no_pdf_stays_out_of_reading(ledger):
+    # It can't be read, so it waits in Filing for a file rather than sitting
+    # unreadable in the queue -- and it doesn't inflate the unread count.
+    ledger.record(paper(title="No File"))          # no url, no PDF anywhere
+    ledger.decide("No File", Decision.ACCEPTED)
+    assert ledger.reading() == []
+    assert ledger.counts()["unread"] == 0
+
+
 def test_read_state_advances_and_counts(ledger):
-    ledger.record(paper(title="A"))
+    ledger.record(paper(title="A", url=READABLE))
     key = ledger.pending()[0].key
     ledger.decide("A", Decision.ACCEPTED)
     assert ledger.counts()["unread"] == 1
