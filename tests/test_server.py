@@ -1745,3 +1745,20 @@ def test_sidebar_renders_skip_rate_and_sort_toggle(client):
     # The sort toggle between pending volume and skip rate.
     assert 'id="alertsort"' in body
     assert "state.alertSort === 'skip' ? 'Sort: most skipped'" in body
+
+
+def test_triage_supports_swipe_and_keyboard(client):
+    body = client.get("/").text
+    # Swipe: the drag machinery, the commit threshold, the directional stamps,
+    # and the touch-action that leaves vertical scrolling to the browser.
+    assert "function wireSwipe" in body
+    assert "const SWIPE_COMMIT" in body
+    assert 'class="swipefb keep"' in body
+    assert 'class="swipefb skip"' in body
+    assert "touch-action: pan-y" in body
+    # Keyboard: navigation and the accept/skip keys, both letters and arrows.
+    assert "function keyDecide" in body
+    assert "case 'a': case 'ArrowRight':" in body
+    assert "case 's': case 'ArrowLeft':" in body
+    # Button, swipe, and key all record through one path.
+    assert "async function commitDecision" in body

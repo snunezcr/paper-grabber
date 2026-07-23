@@ -221,10 +221,34 @@
   @media (prefers-reduced-motion: reduce) { #sidebar { transition: none; } }
 
   .card {
+    position: relative;
     background: var(--card); border: 1px solid var(--line); border-radius: 12px;
     padding: 1rem; margin-bottom: 1rem;
   }
   .card.going { opacity: .35; transform: scale(.99); transition: opacity .18s, transform .18s; }
+
+  /* Triage cards swipe sideways to decide: the browser keeps vertical scrolling
+     (touch-action: pan-y) while we own the horizontal drag. overflow-x: clip
+     hides a card as it flings off; the clip-margin leaves room for the focus
+     ring so a keyboard user's highlight isn't shaved at the edges. */
+  #list { overflow-x: clip; overflow-clip-margin: 8px; }
+  #list .card { touch-action: pan-y; }
+  #list .card.dragging { transition: none; cursor: grabbing; user-select: none; }
+  #list .card.flinging { transition: transform .22s ease-out, opacity .22s ease-out; }
+  #list .card.focused { box-shadow: 0 0 0 2px var(--accent); }
+  /* Directional stamps that fade in as a card is dragged toward a decision. */
+  .swipefb {
+    position: absolute; top: 14px; z-index: 1; pointer-events: none; opacity: 0;
+    padding: .25rem .7rem; border-radius: 999px; font-weight: 700;
+    font-size: .9rem; border: 2px solid currentColor; background: var(--card);
+    transition: opacity .15s;
+  }
+  .swipefb.keep { left: 16px; color: var(--accept); transform: rotate(-8deg); }
+  .swipefb.skip { right: 16px; color: var(--reject); transform: rotate(8deg); }
+  @media (prefers-reduced-motion: reduce) {
+    #list .card.flinging { transition: none; }
+    .swipefb { transition: none; }
+  }
   .title { font-size: 1.08rem; font-weight: 600; margin: 0 0 .35rem; line-height: 1.35; }
   .meta { color: var(--muted); font-size: .87rem; margin-bottom: .6rem; }
   .abstract { font-size: .94rem; margin: 0 0 .5rem; }
@@ -940,20 +964,33 @@ function wireAbstract(el) {
 function triageCard(p) {
   const el = document.createElement('article');
   el.className = 'card';
-  el.innerHTML = cardBody(p) + `
+  el.innerHTML = `
+    <div class="swipefb keep" aria-hidden="true">Keep</div>
+    <div class="swipefb skip" aria-hidden="true">Skip</div>` + cardBody(p) + `
     <div class="actions">
-      ${iconBtn('yes', 'check', 'Interesting')}
-      ${iconBtn('no', 'x', 'Skip')}
+      ${iconBtn('yes', 'check', 'Interesting (press A)')}
+      ${iconBtn('no', 'x', 'Skip (press S)')}
     </div>`;
+  el._paper = p;   // so keyboard and swipe handlers can find it
   wireAbstract(el);
   wirePdfLink(el, p);
   el.querySelector('.yes').addEventListener('click', () => decide(el, p, 'accepted'));
   el.querySelector('.no').addEventListener('click', () => decide(el, p, 'rejected'));
+  wireSwipe(el, p);
   return el;
 }
 
-async function decide(el, paper, decision) {
-  el.classList.add('going');
+// One path records a triage decision, however it was made. A swipe flings the
+// card the way it went (fling = +1 keep / -1 skip); a button or a key fades it.
+async function commitDecision(card, paper, decision, {fling = 0} = {}) {
+  if (fling) {
+    card.classList.remove('dragging');
+    card.classList.add('flinging');
+    card.style.transform = `translateX(${fling * 110}%) rotate(${fling * 8}deg)`;
+    card.style.opacity = '0';
+  } else {
+    card.classList.add('going');
+  }
   try {
     const data = await api(`/api/papers/${encodeURIComponent(paper.key)}/decision`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -962,20 +999,26 @@ async function decide(el, paper, decision) {
     showCounts(data.counts);
     state.pending = (state.pending || []).filter(x => x.key !== paper.key);
     setTimeout(() => {
-      el.remove();
+      card.remove();
       $('#empty').hidden = $('#list').children.length > 0;
       // Counts on the chips must follow the list, or the filter lies.
       renderAlertFilter();
-    }, 180);
+    }, fling ? 220 : 180);
     // Reversing a decision must be one tap: a mis-tap is easy on a tablet, and
     // a rejected paper is suppressed on every future sync -- invisible forever.
     state.lastUndo = paper;
     $('#undo').hidden = false;
     loadFiling();
   } catch (e) {
-    el.classList.remove('going');
+    card.classList.remove('going', 'flinging');
+    card.style.opacity = '';
+    resetSwipe(card);
     showError(`Could not record decision: ${e.message}`);
   }
+}
+
+function decide(card, paper, decision) {
+  commitDecision(card, paper, decision);
 }
 
 $('#undo').addEventListener('click', async () => {
@@ -1014,6 +1057,125 @@ $('#undo').addEventListener('click', async () => {
     loadFiling();
   } catch (e) { showError(`Could not undo: ${e.message}`); }
 });
+
+// ---------- swipe to triage ----------
+// Right keeps, left skips. Vertical drags are left to the browser to scroll
+// (touch-action: pan-y), so only a clearly horizontal gesture is captured.
+const SWIPE_COMMIT = 0.28;   // fraction of card width that commits the decision
+
+function swipeStamps(card) {
+  return [card.querySelector('.swipefb.keep'), card.querySelector('.swipefb.skip')];
+}
+
+function resetSwipe(card) {
+  card.classList.remove('dragging');
+  // Reuse the fling transition so the card eases back rather than snapping.
+  card.classList.add('flinging');
+  card.style.transform = '';
+  for (const s of swipeStamps(card)) if (s) s.style.opacity = 0;
+  setTimeout(() => card.classList.remove('flinging'), 220);
+}
+
+function wireSwipe(card, paper) {
+  let startX = 0, startY = 0, dx = 0, width = 0;
+  let active = false, horizontal = false, done = false;
+
+  card.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    // Buttons and links do their own thing; don't start a swipe on them.
+    if (e.target.closest('button, a, input, textarea')) return;
+    active = true; horizontal = false; done = false;
+    startX = e.clientX; startY = e.clientY; dx = 0; width = card.offsetWidth;
+  });
+
+  card.addEventListener('pointermove', e => {
+    if (!active || done) return;
+    const mx = e.clientX - startX, my = e.clientY - startY;
+    if (!horizontal) {
+      if (Math.abs(mx) < 8) return;                              // dead zone
+      if (Math.abs(my) > Math.abs(mx)) { active = false; return; }  // it's a scroll
+      horizontal = true;
+      card.classList.add('dragging');
+      card.setPointerCapture(e.pointerId);
+    }
+    dx = mx;
+    card.style.transform = `translateX(${dx}px) rotate(${dx / 40}deg)`;
+    const frac = Math.max(-1, Math.min(1, dx / width));
+    const [keep, skip] = swipeStamps(card);
+    keep.style.opacity = frac > 0 ? Math.min(1, frac * 2.5) : 0;
+    skip.style.opacity = frac < 0 ? Math.min(1, -frac * 2.5) : 0;
+  });
+
+  const finish = () => {
+    if (!active) return;
+    active = false;
+    if (!horizontal || done) return;
+    if (Math.abs(dx / width) >= SWIPE_COMMIT) {
+      done = true;
+      const dir = dx > 0 ? 1 : -1;
+      commitDecision(card, paper, dir > 0 ? 'accepted' : 'rejected', {fling: dir});
+    } else {
+      resetSwipe(card);
+    }
+  };
+  card.addEventListener('pointerup', finish);
+  card.addEventListener('pointercancel', finish);
+}
+
+// ---------- keyboard to triage ----------
+// For when a keyboard is attached: J/K or arrows move the focus ring, A or ->
+// keeps, S or <- skips, O/Enter reads, U undoes. The ring is a keyboard-only
+// affordance, cleared on the next touch of the list.
+function triageCards() {
+  return [...$('#list').querySelectorAll('.card:not(.going):not(.flinging)')];
+}
+function focusedCard() {
+  return $('#list').querySelector('.card.focused');
+}
+function setFocusedCard(card) {
+  for (const c of $('#list').querySelectorAll('.card.focused')) c.classList.remove('focused');
+  if (card) { card.classList.add('focused'); card.scrollIntoView({block: 'nearest'}); }
+}
+function moveTriageFocus(delta) {
+  const cards = triageCards();
+  if (!cards.length) return;
+  const i = cards.indexOf(focusedCard());
+  const next = i < 0 ? 0 : Math.min(cards.length - 1, Math.max(0, i + delta));
+  setFocusedCard(cards[next]);
+}
+function keyDecide(decision) {
+  const cards = triageCards();
+  if (!cards.length) return;
+  const card = focusedCard() || cards[0];
+  const i = cards.indexOf(card);
+  // Advance the ring to the next card before this one flings away.
+  setFocusedCard(cards[i + 1] || cards[i - 1] || null);
+  decide(card, card._paper, decision);
+}
+
+document.addEventListener('keydown', e => {
+  if (state.tab !== 'triage') return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  // Leave typing, and any focused control, to their own keys.
+  if (e.target.closest('input, textarea, [contenteditable], button, a')) return;
+  // Not while a dialog or the reader is up.
+  if (!notePanel.hidden || !$('#sheet').hidden || !$('#reader').hidden) return;
+  switch (e.key) {
+    case 'j': case 'ArrowDown': e.preventDefault(); moveTriageFocus(1); break;
+    case 'k': case 'ArrowUp': e.preventDefault(); moveTriageFocus(-1); break;
+    case 'a': case 'ArrowRight': e.preventDefault(); keyDecide('accepted'); break;
+    case 's': case 'ArrowLeft': e.preventDefault(); keyDecide('rejected'); break;
+    case 'o': case 'Enter': {
+      const c = focusedCard() || triageCards()[0];
+      if (c && c._paper && hasPdfFile(c._paper)) { e.preventDefault(); openReader(c._paper); }
+      break;
+    }
+    case 'u': if (!$('#undo').hidden) { e.preventDefault(); $('#undo').click(); } break;
+  }
+});
+
+// Touching the list is a pointer session, so drop the keyboard ring.
+$('#list').addEventListener('pointerdown', () => setFocusedCard(null));
 
 const NO_ALERT = '(no alert)';
 

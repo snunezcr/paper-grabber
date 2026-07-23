@@ -142,7 +142,7 @@ anything that matters:
 ## Development
 
 ```bash
-pytest                       # 736 tests, no network required
+pytest                       # 737 tests, no network required
 ./scripts/demo.sh            # drive the pipeline against bundled fixtures
 ```
 
