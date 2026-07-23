@@ -529,6 +529,9 @@
   #reader.mode-draw .rdtext, #reader.mode-erase .rdtext { pointer-events: none; }
   #reader.mode-draw #rddoc { cursor: crosshair; }
   #reader.mode-erase #rddoc { cursor: pointer; }
+  /* No native gesture scroll while drawing -- the pen would otherwise pan the
+     page as it moves. Navigation comes back via a two-finger pan. */
+  #reader.mode-draw #rddoc, #reader.mode-erase #rddoc { touch-action: none; }
 
   .rdbody { flex: 1; display: flex; min-height: 0; }
   #rddoc {
@@ -3420,6 +3423,42 @@ function endStroke() {
 }
 $('#rddoc').addEventListener('pointerup', endStroke);
 $('#rddoc').addEventListener('pointercancel', endStroke);
+
+// Draw/erase kill native scroll (touch-action: none) so the pen doesn't pan the
+// page. Two fingers pan it back -- pen draws, two fingers scroll, the tablet
+// drawing convention.
+const panPts = new Map();
+let panPrev = null;
+function panAvg() {
+  let x = 0, y = 0;
+  for (const p of panPts.values()) { x += p.x; y += p.y; }
+  return {x: x / panPts.size, y: y / panPts.size};
+}
+$('#rddoc').addEventListener('pointerdown', e => {
+  if (e.pointerType !== 'touch') return;
+  if (state.readerMode !== 'draw' && state.readerMode !== 'erase') return;
+  panPts.set(e.pointerId, {x: e.clientX, y: e.clientY});
+  if (panPts.size === 2) panPrev = panAvg();
+});
+$('#rddoc').addEventListener('pointermove', e => {
+  if (e.pointerType !== 'touch' || !panPts.has(e.pointerId) || drawing) return;
+  panPts.set(e.pointerId, {x: e.clientX, y: e.clientY});
+  if (panPts.size >= 2) {
+    const now = panAvg();
+    if (panPrev) {
+      $('#rddoc').scrollTop -= now.y - panPrev.y;
+      $('#rddoc').scrollLeft -= now.x - panPrev.x;
+    }
+    panPrev = now;
+  }
+});
+function endPan(e) {
+  if (e.pointerType !== 'touch') return;
+  panPts.delete(e.pointerId);
+  if (panPts.size < 2) panPrev = null;
+}
+$('#rddoc').addEventListener('pointerup', endPan);
+$('#rddoc').addEventListener('pointercancel', endPan);
 
 function inkUndo() {
   for (let i = state.annotations.length - 1; i >= 0; i--) {
