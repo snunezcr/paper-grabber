@@ -490,9 +490,9 @@
     background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.22);
   }
   #rdnotepane {
-    /* Half the previous width: the page is what you are here to read, and the
-       note is usually a sentence. */
-    flex: 0 0 10rem; display: flex; flex-direction: column; gap: .5rem;
+    /* Landscape has the width to spare, so give notes real room to write in
+       rather than a sliver beside the page. */
+    flex: 0 0 30rem; display: flex; flex-direction: column; gap: .5rem;
     padding: .6rem; border-left: 1px solid var(--line); background: var(--sheet);
   }
   #rdnotepane[hidden] { display: none; }
@@ -621,7 +621,7 @@
     <button id="tab-triage" aria-selected="true">Triage<span class="badge" id="badge-triage">0</span></button>
     <button id="tab-reading" aria-selected="false">Reading<span class="badge" id="badge-reading">0</span></button>
     <button id="tab-filing" aria-selected="false">Filing<span class="badge" id="badge-filing">0</span></button>
-    <button id="tab-processed" aria-selected="false">Processed<span class="badge" id="badge-processed">0</span></button>
+    <button id="tab-processed" aria-selected="false">Stored<span class="badge" id="badge-processed">0</span></button>
   </nav>
 </header>
 
@@ -2005,7 +2005,7 @@ async function loadProcessed() {
     showCounts(data.counts);
     state.processedPapers = data.papers;
     renderProcessed();
-  } catch (e) { showError(`Could not load processed papers: ${e.message}`); }
+  } catch (e) { showError(`Could not load stored papers: ${e.message}`); }
 }
 
 function renderProcessed() {
