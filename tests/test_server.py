@@ -1932,3 +1932,13 @@ def test_reading_read_button_is_selected_unambiguously(client):
     # must be selected as .read.iconbtn or the segment shadows it.
     body = client.get("/").text
     assert "actions.querySelector('.read.iconbtn')?.addEventListener('click', () => openReader(p));" in body
+
+
+def test_reader_has_a_fullscreen_toggle(client):
+    body = client.get("/").text
+    assert 'id="rdfull"' in body
+    assert "el.requestFullscreen || el.webkitRequestFullscreen" in body
+    # Fills the viewport in native fullscreen or the CSS fallback.
+    assert "#reader:fullscreen, #reader:-webkit-full-screen, #reader.rdmax" in body
+    # Closing the reader leaves fullscreen too.
+    assert "(document.exitFullscreen || document.webkitExitFullscreen)?.call(document);" in body

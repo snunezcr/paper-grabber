@@ -460,6 +460,12 @@
     background: var(--bg);
   }
   #reader[hidden] { display: none; }
+  /* Full screen: cover the header too and take the whole viewport, for the
+     paper plus its notes with nothing else on screen. Native fullscreen sizes
+     the element itself; .rdmax is the fallback when the API isn't available. */
+  #reader:fullscreen, #reader:-webkit-full-screen, #reader.rdmax {
+    top: 0; width: 100%; height: 100%;
+  }
   .rdtop {
     display: flex; align-items: center; gap: .5rem; flex: 0 0 auto;
     padding: .45rem .75rem;
@@ -744,6 +750,7 @@
     <button id="rdout" aria-label="Zoom out" data-tip="Zoom out"></button>
     <button id="rdin" aria-label="Zoom in" data-tip="Zoom in"></button>
     <button id="rdnotes" aria-label="Show notes" data-tip="Show or hide notes"></button>
+    <button id="rdfull" aria-label="Full screen" data-tip="Full screen"></button>
     <button id="rdread" aria-label="Mark as read" data-tip="Mark as read"></button>
     <button id="rdclose" aria-label="Close reader" data-tip="Close"></button>
   </div>
@@ -805,6 +812,8 @@ const ICONS = {
   check: '<path d="M20 6 9 17l-5-5"/>',
   x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
   bookmark: '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>',
+  maximize: '<path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/>',
+  minimize: '<path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/>',
   'file-up': '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M12 12v6"/><path d="m15 15-3-3-3 3"/>',
   'trash-2': '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>',
   'folder-input':
@@ -868,6 +877,7 @@ function paintStaticIcons() {
   map['#rdin'] = 'zoom-in';
   map['#rdout'] = 'zoom-out';
   map['#rdnotes'] = 'pencil';
+  map['#rdfull'] = 'maximize';
   map['#rdread'] = 'check';
   for (const [sel, name] of Object.entries(map)) {
     const el = document.querySelector(sel);
@@ -2624,6 +2634,7 @@ async function openReader(paper) {
     {className: 'note', textContent: 'Loading…'}));
   $('#reader').hidden = false;
   readerScale = null;
+  updateFullBtn();
   markReading(paper);
 
   try {
@@ -2732,12 +2743,61 @@ function evictPage(canvas, w, h) {
 }
 
 function closeReader() {
+  // Leave full screen with the reader, or the empty view stays full-screen.
+  const fs = document.fullscreenElement || document.webkitFullscreenElement;
+  if (fs === $('#reader')) (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+  $('#reader').classList.remove('rdmax');
   $('#reader').hidden = true;
   renderObs?.disconnect(); renderObs = null;
   keepObs?.disconnect(); keepObs = null;
   if (readerDoc) { readerDoc.destroy(); readerDoc = null; }
   $('#rddoc').replaceChildren();
   state.readerPaper = null;
+}
+
+// ---------- reader full screen ----------
+// The reader element carries the page and the notes pane, so making it the
+// fullscreen element shows both with nothing else on screen. Falls back to a
+// CSS class that at least covers the app header where the API is unavailable.
+function readerIsFull() {
+  const fs = document.fullscreenElement || document.webkitFullscreenElement;
+  return fs === $('#reader') || $('#reader').classList.contains('rdmax');
+}
+
+function updateFullBtn() {
+  const on = readerIsFull();
+  const btn = $('#rdfull');
+  btn.innerHTML = icon(on ? 'minimize' : 'maximize');
+  btn.setAttribute('aria-label', on ? 'Exit full screen' : 'Full screen');
+  btn.setAttribute('data-tip', on ? 'Exit full screen' : 'Full screen');
+}
+
+$('#rdfull').addEventListener('click', () => {
+  const el = $('#reader');
+  const exit = document.exitFullscreen || document.webkitExitFullscreen;
+  const req = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (document.fullscreenElement || document.webkitFullscreenElement) {
+    exit?.call(document);
+  } else if (el.classList.contains('rdmax')) {
+    el.classList.remove('rdmax');
+    updateFullBtn();
+  } else if (req) {
+    req.call(el).catch(() => { el.classList.add('rdmax'); updateFullBtn(); });
+  } else {
+    el.classList.add('rdmax');   // no Fullscreen API: at least cover the header
+    updateFullBtn();
+  }
+});
+
+// System-driven exit (Esc, the tablet's back gesture) must repaint the button
+// and drop the fallback class.
+for (const ev of ['fullscreenchange', 'webkitfullscreenchange']) {
+  document.addEventListener(ev, () => {
+    if (!(document.fullscreenElement || document.webkitFullscreenElement)) {
+      $('#reader').classList.remove('rdmax');
+    }
+    updateFullBtn();
+  });
 }
 
 async function rezoom(factor) {
