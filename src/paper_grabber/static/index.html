@@ -528,11 +528,13 @@
   .rdtext ::selection { background: rgba(120,160,230,.4); }
   /* Floating colour picker shown while text is selected. */
   #rdhltools {
-    position: fixed; z-index: 30; display: flex; gap: .35rem; padding: .35rem;
+    position: fixed; z-index: 30; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: .35rem; padding: .35rem .5rem;
     background: var(--card); border: 1px solid var(--line); border-radius: 12px;
     box-shadow: 0 4px 16px rgba(0,0,0,.28);
   }
   #rdhltools[hidden] { display: none; }
+  .hllabel { font-size: .78rem; font-weight: 600; color: var(--muted); padding-right: .1rem; }
   .hlcolor {
     width: 30px; height: 30px; border-radius: 50%; cursor: pointer;
     border: 1px solid rgba(0,0,0,.25);
@@ -851,6 +853,7 @@
     <button id="rdhintclose" aria-label="Dismiss">&times;</button>
   </div>
   <div id="rdhltools" hidden aria-label="Highlight">
+    <span class="hllabel">Highlight</span>
     <button class="hlcolor" data-color="#ffd54a" style="background:#ffd54a" aria-label="Highlight yellow"></button>
     <button class="hlcolor" data-color="#a5d6a7" style="background:#a5d6a7" aria-label="Highlight green"></button>
     <button class="hlcolor" data-color="#90caf9" style="background:#90caf9" aria-label="Highlight blue"></button>
@@ -1043,7 +1046,8 @@ let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               alertStats: {}, alertSort: 'pending',
               filing: null, processedPapers: [], rejectedPapers: [],
               readingPapers: [], readStates: new Set(['unread', 'reading', 'read']),
-              searchScope: 'view', corpus: null, annotations: [], undoStack: [] };
+              searchScope: 'view', corpus: null, annotations: [], hlRange: null,
+              undoStack: [] };
 
 // Capabilities this page expects the server to have.
 const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf', 'reading', 'corpus', 'annotations'];
@@ -3135,10 +3139,11 @@ async function saveAnnotations() {
 }
 
 function createHighlight(color) {
-  const sel = window.getSelection();
-  if (!sel || sel.isCollapsed || !sel.rangeCount) return;
-  const range = sel.getRangeAt(0);
-  const quote = sel.toString().trim();
+  // The range captured when the picker was shown -- the live selection may have
+  // been cleared by the tap or the OS menu.
+  const range = state.hlRange;
+  if (!range) return;
+  const quote = range.toString().trim();
   // Rects can span pages; group them by the page they fall in and make one
   // highlight per page. Coordinates are normalized 0..1 to the page box, so
   // they survive zoom and re-render.
@@ -3163,7 +3168,8 @@ function createHighlight(color) {
       rects, color, quote,
     });
   }
-  sel.removeAllRanges();
+  window.getSelection()?.removeAllRanges();
+  state.hlRange = null;
   $('#rdhltools').hidden = true;
   dismissHlHint();   // they've found it
   saveAnnotations();
@@ -3209,26 +3215,31 @@ function renderHighlightList() {
 let hlToolTimer = null;
 function scheduleHlTools() {
   clearTimeout(hlToolTimer);
-  hlToolTimer = setTimeout(updateHlTools, 150);
+  hlToolTimer = setTimeout(updateHlTools, 40);
 }
 function updateHlTools() {
   const tools = $('#rdhltools');
   const sel = window.getSelection();
   if ($('#reader').hidden || !sel || sel.isCollapsed || !sel.rangeCount) {
-    tools.hidden = true; return;
+    tools.hidden = true; state.hlRange = null; return;
   }
   const range = sel.getRangeAt(0);
-  if (!$('#rddoc').contains(range.commonAncestorContainer)) { tools.hidden = true; return; }
-  const rect = range.getBoundingClientRect();
-  if (!rect.width) { tools.hidden = true; return; }
+  if (!$('#rddoc').contains(range.commonAncestorContainer)
+      || !range.getBoundingClientRect().width) {
+    tools.hidden = true; state.hlRange = null; return;
+  }
+  // Keep our own copy of the range: tapping a colour, or the OS selection menu,
+  // can clear the live selection, and this way the highlight still lands.
+  state.hlRange = range.cloneRange();
+  // Pin the picker under the reader's toolbar -- a fixed spot clear of the OS
+  // Copy/Share menu, which floats over the selected text itself.
   tools.hidden = false;
-  const t = tools.getBoundingClientRect();
-  tools.style.top = `${Math.max(4, rect.top - t.height - 8)}px`;
-  tools.style.left =
-    `${Math.max(4, Math.min(window.innerWidth - t.width - 4, rect.left + rect.width / 2 - t.width / 2))}px`;
+  tools.style.top = `${$('.rdtop').getBoundingClientRect().bottom + 6}px`;
 }
 
 document.addEventListener('selectionchange', scheduleHlTools);
+// A tap on the bar must not collapse the selection before the colour applies.
+$('#rdhltools').addEventListener('mousedown', e => e.preventDefault());
 for (const b of document.querySelectorAll('#rdhltools .hlcolor'))
   b.addEventListener('click', () => createHighlight(b.dataset.color));
 
