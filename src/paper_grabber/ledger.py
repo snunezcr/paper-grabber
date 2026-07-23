@@ -79,6 +79,13 @@ ALTER TABLE papers ADD COLUMN read_state TEXT;
 ALTER TABLE papers ADD COLUMN pinned INTEGER;
 """
 
+# Highlights and their notes, as a JSON array: the working store the reader
+# renders from and recall searches. Mirrored onto the Drive file's
+# appProperties for durability, the same way notes mirror to the description.
+_ANNOTATION_COLUMNS = """
+ALTER TABLE papers ADD COLUMN annotations TEXT;
+"""
+
 SETTING_BASE_FOLDER_ID = "base_folder_id"
 SETTING_BASE_FOLDER_NAME = "base_folder_name"
 
@@ -101,6 +108,7 @@ class LedgerPaper:
     note: str | None = None
     read_state: str | None = None
     pinned: bool = False
+    annotations: list[dict[str, Any]] | None = None
 
 
 def _scholar_pdf_url(url: str | None) -> bool:
@@ -185,6 +193,8 @@ def paper_view(p: LedgerPaper) -> dict[str, Any]:
         # when you say so. Pinned floats it to the top of the queue.
         "read_state": p.read_state or "unread",
         "pinned": bool(p.pinned),
+        # Highlights + their notes; recall searches their quotes.
+        "annotations": p.annotations or [],
         # Opens the PDF in Drive, which is where reading and annotation happen.
         "drive_url": (
             f"https://drive.google.com/file/d/{p.drive_file_id}/view"
@@ -210,7 +220,7 @@ class Ledger:
         triaged a hundred papers should not lose them to a schema change.
         """
         have = {r[1] for r in self._db.execute("PRAGMA table_info(papers)")}
-        for block in (_DESTINATION_COLUMNS, _READING_COLUMNS):
+        for block in (_DESTINATION_COLUMNS, _READING_COLUMNS, _ANNOTATION_COLUMNS):
             for statement in block.strip().split(";"):
                 statement = statement.strip()
                 if not statement:
@@ -403,7 +413,7 @@ class Ledger:
         rows = self._db.execute(
             "SELECT key, title, payload, decision, first_seen, decided_at,"
             " dest_folder_id, dest_folder_name, staged_name, drive_file_id,"
-            " uploaded_at, note, read_state, pinned"
+            " uploaded_at, note, read_state, pinned, annotations"
             " FROM papers WHERE decision = ? ORDER BY decided_at DESC",
             (Decision.ACCEPTED.value,),
         ).fetchall()
@@ -499,11 +509,26 @@ class Ledger:
 
     def get(self, key: str) -> LedgerPaper | None:
         row = self._db.execute(
-            "SELECT key, title, payload, decision, first_seen, decided_at, dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note, read_state, pinned"
+            "SELECT key, title, payload, decision, first_seen, decided_at, dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note, read_state, pinned, annotations"
             " FROM papers WHERE key = ?",
             (key,),
         ).fetchone()
         return self._row(row) if row else None
+
+    def get_annotations(self, key: str) -> list[dict[str, Any]]:
+        row = self._db.execute(
+            "SELECT annotations FROM papers WHERE key = ?", (key,)
+        ).fetchone()
+        return json.loads(row[0]) if row and row[0] else []
+
+    def set_annotations(self, key: str, annotations: list[dict[str, Any]]) -> bool:
+        """Replace a paper's highlights wholesale (the reader sends the full set)."""
+        cur = self._db.execute(
+            "UPDATE papers SET annotations = ? WHERE key = ?",
+            (json.dumps(annotations), key),
+        )
+        self._db.commit()
+        return cur.rowcount > 0
 
     def decision_for(self, title: str) -> Decision | None:
         row = self._db.execute(
@@ -588,6 +613,7 @@ class Ledger:
             note=r[11] if len(r) > 11 else None,
             read_state=r[12] if len(r) > 12 else None,
             pinned=bool(r[13]) if len(r) > 13 else False,
+            annotations=json.loads(r[14]) if len(r) > 14 and r[14] else None,
         )
 
     def close(self) -> None:

@@ -255,6 +255,10 @@ class FakeDrive:
     def set_description(self, file_id, description):
         self.descriptions[file_id] = description
 
+    def set_app_property(self, file_id, key, value):
+        self.app_props = getattr(self, "app_props", {})
+        self.app_props.setdefault(file_id, {})[key] = value
+
     def create_folder(self, name, *, parent_id):
         new_id = f"NEW-{name}"
         self.tree[new_id] = (name, parent_id, [])
@@ -1999,3 +2003,51 @@ def test_library_recall_search(client):
     assert "idbSet('corpus', data.papers);" in body
     assert "function renderRecall" in body
     assert "state.searchScope === 'library'" in body
+
+
+# --- highlights / annotations -------------------------------------------------
+
+
+def _accepted_key(seeded, title="Kept", url="https://arxiv.org/abs/2601.9"):
+    with Ledger(seeded) as led:
+        led.record(AlertPaper(title=title, url=url))
+        led.decide(title, Decision.ACCEPTED)
+        return [p.key for p in led.accepted_all() if p.title == title][0]
+
+
+def test_annotations_get_and_put(seeded):
+    key = _accepted_key(seeded)
+    c = TestClient(create_app(seeded))
+    assert c.get(f"/api/papers/{key}/annotations").json()["annotations"] == []
+    anns = [{"id": "h1", "page": 1, "rects": [[0.1, 0.1, 0.2, 0.02]],
+             "color": "#ffd54a", "quote": "syndrome extraction"}]
+    r = c.put(f"/api/papers/{key}/annotations", json={"annotations": anns})
+    assert r.status_code == 200 and r.json()["count"] == 1
+    assert c.get(f"/api/papers/{key}/annotations").json()["annotations"] == anns
+
+
+def test_annotation_quotes_reach_the_corpus(seeded):
+    key = _accepted_key(seeded)
+    with Ledger(seeded) as led:
+        led.set_annotations(key, [{"id": "h1", "page": 1, "rects": [],
+                                   "color": "#ffd54a", "quote": "measurement-free"}])
+    c = TestClient(create_app(seeded))
+    kept = next(p for p in c.get("/api/corpus").json()["papers"] if p["key"] == key)
+    assert kept["annotations"][0]["quote"] == "measurement-free"
+
+
+def test_annotations_mirror_to_drive_when_uploaded(seeded):
+    key = _accepted_key(seeded)
+    with Ledger(seeded) as led:
+        led.set_uploaded(key, "DRIVE1")
+    drive = FakeDrive()
+    c = TestClient(create_app(seeded, drive_factory=lambda: drive))
+    anns = [{"id": "h1", "page": 1, "rects": [], "color": "#ffd54a", "quote": "q"}]
+    r = c.put(f"/api/papers/{key}/annotations", json={"annotations": anns})
+    assert r.json()["synced_to_drive"] is True
+    assert "annotations" in drive.app_props["DRIVE1"]
+
+
+def test_annotations_404_for_unknown_paper(seeded):
+    c = TestClient(create_app(seeded))
+    assert c.put("/api/papers/nope/annotations", json={"annotations": []}).status_code == 404

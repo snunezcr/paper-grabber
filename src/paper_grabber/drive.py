@@ -282,6 +282,21 @@ class DriveClient:
         except HttpError as exc:
             raise DriveError(f"could not update {file_id}: {exc}") from exc
 
+    def set_app_property(self, file_id: str, key: str, value: str | None) -> None:
+        """Store a private key/value blob in the file's appProperties.
+
+        Metadata attached to the file itself -- where a paper's highlights are
+        mirrored -- without touching its content. App-private and portable with
+        the file. Drive caps total properties near 124 KB per file; the caller
+        keeps the payload well under that.
+        """
+        try:
+            self._service.files().update(
+                fileId=file_id, body={"appProperties": {key: value or ""}}
+            ).execute()
+        except HttpError as exc:
+            raise DriveError(f"could not update {file_id}: {exc}") from exc
+
     def exists_in_folder(self, name: str, folder_id: str) -> bool:
         """True when a file of this name is already in the folder.
 

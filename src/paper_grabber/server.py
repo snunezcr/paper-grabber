@@ -96,6 +96,10 @@ class PinIn(BaseModel):
     pinned: bool
 
 
+class AnnotationsIn(BaseModel):
+    annotations: list[dict[str, Any]]
+
+
 def create_app(
     ledger_path: Path,
     *,
@@ -413,6 +417,46 @@ def create_app(
                 raise HTTPException(status_code=404, detail="no such paper")
             led.set_pinned(key, body.pinned)
             return {"key": key, "pinned": body.pinned}
+
+    @app.get("/api/papers/{key}/annotations")
+    def get_annotations(key: str) -> dict[str, Any]:
+        """A paper's highlights and their notes."""
+        with open_ledger() as led:
+            if led.get(key) is None:
+                raise HTTPException(status_code=404, detail="no such paper")
+            return {"annotations": led.get_annotations(key)}
+
+    # Drive caps total appProperties near 124 KB; stay well under so an oversize
+    # payload skips the mirror rather than failing the save.
+    _APP_PROPERTY_LIMIT = 100_000
+
+    @app.put("/api/papers/{key}/annotations")
+    def set_annotations(key: str, body: AnnotationsIn) -> dict[str, Any]:
+        """Replace a paper's highlights, and mirror them onto the Drive file.
+
+        The ledger is the working store the reader renders from; the Drive
+        appProperties copy is the durable, portable-with-the-file mirror, just
+        as a note mirrors to the file's description.
+        """
+        with open_ledger() as led:
+            paper = led.get(key)
+            if paper is None:
+                raise HTTPException(status_code=404, detail="no such paper")
+            led.set_annotations(key, body.annotations)
+            drive_id = paper.drive_file_id
+
+        synced = False
+        if drive_id:
+            blob = json.dumps(body.annotations, separators=(",", ":"))
+            if len(blob) <= _APP_PROPERTY_LIMIT:
+                try:
+                    open_drive().set_app_property(drive_id, "annotations", blob)
+                    synced = True
+                except (DriveError, HTTPException):
+                    # Highlights are already saved in the ledger; the mirror is
+                    # best-effort, exactly like the note-to-description sync.
+                    pass
+        return {"key": key, "count": len(body.annotations), "synced_to_drive": synced}
 
     @app.post("/api/papers/{key}/local-pdf")
     async def upload_local_pdf(key: str, file: UploadFile = File(...)) -> dict[str, Any]:
@@ -755,6 +799,7 @@ def create_app(
                     "notes",
                     "reading",
                     "corpus",
+                    "annotations",
                 }
             ),
         }

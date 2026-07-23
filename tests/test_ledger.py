@@ -598,3 +598,16 @@ def test_accepted_all_includes_papers_with_no_pdf(ledger):
         ledger.decide(t, Decision.ACCEPTED)
     assert sorted(p.title for p in ledger.accepted_all()) == ["Has PDF", "No PDF"]
     assert [p.title for p in ledger.reading()] == ["Has PDF"]   # readable only
+
+
+def test_annotations_round_trip(ledger):
+    ledger.record(paper(title="A", url=READABLE))
+    ledger.decide("A", Decision.ACCEPTED)
+    key = ledger.accepted_all()[0].key
+    assert ledger.get_annotations(key) == []
+    anns = [{"id": "h1", "page": 3, "rects": [[0.1, 0.2, 0.3, 0.02]],
+             "color": "#ffd54a", "quote": "bosonic ancilla loss"}]
+    ledger.set_annotations(key, anns)
+    assert ledger.get_annotations(key) == anns
+    ledger.set_annotations(key, [])          # deletion is a full replace
+    assert ledger.get_annotations(key) == []
