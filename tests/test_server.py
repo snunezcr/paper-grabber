@@ -2083,3 +2083,15 @@ def test_reader_has_drawing_and_modes(client):
     assert "function paintPageInk" in body
     assert "type: 'highlight', page:" in body
     assert "function inkUndo" in body
+
+
+def test_reader_can_copy_highlights(client):
+    body = client.get("/").text
+    assert 'id="rdhlcopy"' in body
+    assert "function copyHighlights" in body
+    # Reading order (page, then vertical position), a Markdown summary, and a
+    # best-effort citation prepended.
+    assert "function highlightsInReadingOrder" in body
+    assert "a.page - b.page || a.y - b.y" in body
+    assert "```bibtex" in body
+    assert "highlightsMarkdown" in body

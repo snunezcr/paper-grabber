@@ -910,6 +910,7 @@
       <div class="shlabel">Highlights</div>
       <p class="notehint" id="rdhlhint">Select text in the page to highlight it.</p>
       <div id="rdhllist"></div>
+      <button id="rdhlcopy" class="linkbtn" hidden>Copy highlights</button>
     </aside>
   </div>
   <div id="rderaser" hidden></div>
@@ -3303,10 +3304,52 @@ function dismissHlHint() {
 }
 $('#rdhintclose').addEventListener('click', dismissHlHint);
 
+// Highlights in reading order: page, then top-to-bottom by the top of the
+// selection -- not the order they were made in.
+function highlightsInReadingOrder() {
+  return state.annotations
+    .filter(a => a.type !== 'ink')
+    .map(a => ({...a, y: Math.min(...(a.rects || [[0, 0]]).map(r => r[1]))}))
+    .sort((a, b) => a.page - b.page || a.y - b.y);
+}
+
+// A Markdown reading summary of a paper's highlights, with its metadata, note,
+// and a citation, ready to paste into notes or a draft.
+function highlightsMarkdown(bibtex) {
+  const p = state.readerPaper;
+  const out = [`# ${p.title}`];
+  const meta = [(p.authors || []).join(', '), p.venue, p.year].filter(Boolean).join(' · ');
+  if (meta) out.push(meta);
+  if (p.doi) out.push(`DOI: ${p.doi}`);
+  if (bibtex) out.push('', '```bibtex', bibtex.trim(), '```');
+  out.push('');
+  for (const h of highlightsInReadingOrder()) {
+    out.push(`> ${h.quote || '(no text)'}  (p. ${h.page})`);
+    if (h.comment) out.push(`    — ${h.comment}`);
+    out.push('');
+  }
+  if (p.note) out.push('---', `Note: ${p.note}`);
+  return out.join('\n') + '\n';
+}
+
+async function copyHighlights() {
+  if (!state.readerPaper || !highlightsInReadingOrder().length) return;
+  let bibtex = '';
+  try {   // best-effort: a citation makes the summary drop-in for writing
+    bibtex = (await api(`/api/papers/${encodeURIComponent(state.readerPaper.key)}/bibtex`)).bibtex || '';
+  } catch (e) { /* no citation, still copy the highlights */ }
+  const n = highlightsInReadingOrder().length;
+  const ok = await copyToClipboard(highlightsMarkdown(bibtex));
+  showNotice(ok ? `Copied ${n} highlight${n === 1 ? '' : 's'}`
+                : 'Copying is blocked here — select the note text by hand.');
+}
+$('#rdhlcopy').addEventListener('click', copyHighlights);
+
 function renderAnnotationList() {
   const list = $('#rdhllist');
   // Highlights only -- drawings are managed with the eraser and undo, not here.
   const highlights = state.annotations.filter(a => a.type !== 'ink');
+  $('#rdhlcopy').hidden = highlights.length === 0;
   $('#rdhlhint').hidden = highlights.length > 0;
   list.replaceChildren(...highlights.map(a => {
     const row = document.createElement('div');
