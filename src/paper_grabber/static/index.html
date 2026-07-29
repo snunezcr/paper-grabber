@@ -1130,7 +1130,7 @@ let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               undoStack: [] };
 
 // Capabilities this page expects the server to have.
-const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf', 'reading', 'corpus', 'annotations', 'stage'];
+const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf', 'reading', 'corpus', 'annotations'];
 
 // A tiny IndexedDB key/value store for the recall corpus, which can outgrow
 // localStorage's ~5 MB. Best-effort: if IndexedDB is unavailable or errors, the
@@ -2080,9 +2080,22 @@ async function uploadOne(paper, card) {
   card.querySelector('.unfile').disabled = true;
   // Say what is actually happening: an unfetched paper downloads first, which
   // is most of the wait.
-  cardStatus(card, paper.staged ? 'Uploading…' : 'Downloading, then uploading…');
   state.uploading = paper.key;
   try {
+    // If this device holds the PDF but the server doesn't, hand our copy over
+    // so the upload sends it instead of fetching the paper again.
+    if (!paper.staged) {
+      const cached = await idbGet(pdfCacheKey(paper.key));
+      if (cached) {
+        cardStatus(card, 'Uploading your copy…');
+        const form = new FormData();
+        form.append('file', new Blob([cached], {type: 'application/pdf'}), 'paper.pdf');
+        const r = await fetch(`/api/papers/${encodeURIComponent(paper.key)}/local-pdf`,
+          {method: 'POST', body: form});
+        if (r.ok) paper.staged = true;
+      }
+    }
+    cardStatus(card, paper.staged ? 'Uploading…' : 'Downloading, then uploading…');
     await api('/api/upload', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -3024,7 +3037,7 @@ async function openReader(paper) {
   $('#reader').hidden = false;
   readerScale = null;
   updateFullBtn();
-  updateDownloadBtn(paper);
+  updateDownloadBtn(paper, false);
   markReading(paper);
 
   // Highlights load before the pages render, so each page paints them on first
@@ -3043,8 +3056,16 @@ async function openReader(paper) {
 
   try {
     const lib = await loadPdfjs();
-    const url = `/api/papers/${encodeURIComponent(paper.key)}/pdf`;
-    readerDoc = await lib.getDocument({url, withCredentials: true}).promise;
+    // Prefer a copy saved on this device -- it reads with no network at all.
+    const cached = await idbGet(pdfCacheKey(paper.key));
+    updateDownloadBtn(paper, !!cached);
+    if (cached) {
+      const data = cached instanceof Uint8Array ? cached : new Uint8Array(cached);
+      readerDoc = await lib.getDocument({data}).promise;
+    } else {
+      const url = `/api/papers/${encodeURIComponent(paper.key)}/pdf`;
+      readerDoc = await lib.getDocument({url, withCredentials: true}).promise;
+    }
     $('#rdpages').textContent = `${readerDoc.numPages} pages`;
     await layoutPages();
   } catch (e) {
@@ -3710,32 +3731,33 @@ async function markReading(paper) {
   } catch (e) { /* non-fatal: it simply stays unread */ }
 }
 
-// Save the PDF to the server's staging for offline reading, and so a later
-// upload sends this copy instead of fetching it again. Hidden once in Drive,
-// or when there's nothing open-access to fetch and nothing attached.
-function updateDownloadBtn(paper) {
+// Save the PDF to *this device* (IndexedDB) so it reads offline; the copy is
+// also handed to the server at upload time so it isn't fetched again. Shown for
+// any readable paper; a green state means a copy is already on the device.
+function pdfCacheKey(key) { return 'pdf:' + key; }
+
+function updateDownloadBtn(paper, saved) {
   const btn = $('#rddownload');
-  if (paper.uploaded || (!paper.has_oa_pdf && !paper.staged)) { btn.hidden = true; return; }
+  if (!hasPdfFile(paper)) { btn.hidden = true; return; }
   btn.hidden = false;
-  const saved = paper.staged;
-  btn.classList.toggle('saved', saved);
-  const label = saved ? 'Saved locally — will be used for upload' : 'Save for offline';
+  btn.classList.toggle('saved', !!saved);
+  const label = saved ? 'Saved to this device' : 'Save to this device for offline';
   btn.setAttribute('aria-label', label);
   btn.setAttribute('data-tip', label);
 }
 
 $('#rddownload').addEventListener('click', async () => {
   const paper = state.readerPaper;
-  if (!paper || paper.staged) return;   // already held locally
   const btn = $('#rddownload');
+  if (!paper || !readerDoc || btn.classList.contains('saved')) return;   // already on device
   btn.disabled = true;
   try {
-    await api(`/api/papers/${encodeURIComponent(paper.key)}/stage`, {method: 'POST'});
-    paper.staged = true;
-    updateDownloadBtn(paper);
-    showNotice('Saved for offline — it will be used for upload');
+    // Reuse the bytes the reader already loaded rather than fetching again.
+    await idbSet(pdfCacheKey(paper.key), await readerDoc.getData());
+    updateDownloadBtn(paper, true);
+    showNotice('Saved to this device for offline reading');
   } catch (e) {
-    showError(`Could not save the PDF: ${e.message}`);
+    showError(`Could not save to this device: ${e.message}`);
   } finally { btn.disabled = false; }
 });
 

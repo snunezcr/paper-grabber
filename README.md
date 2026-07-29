@@ -41,8 +41,9 @@ metadata APIs it queries and the Drive folder you pick.
   `Content-Type`, and names them `YYYY Title.pdf`.
 - **Uploads to Drive** and deletes the local copy only after Drive confirms a
   matching size and MD5.
-- **Save for offline** from the reader downloads the PDF to the server's
-  staging; a later upload sends that copy instead of fetching again.
+- **Save to this device** from the reader stores the PDF in the browser
+  (IndexedDB) so it reads offline; the copy is handed to the server at upload
+  time so the paper isn't fetched again.
 - **Notes** written while filing become the file's description in Drive.
 - **Highlighting** in the reader: select text to highlight it; highlights are
   stored per paper, their quotes join Library recall, and they mirror onto the
@@ -155,7 +156,7 @@ anything that matters:
 ## Development
 
 ```bash
-pytest                       # 777 tests, no network required
+pytest                       # 774 tests, no network required
 ./scripts/demo.sh            # drive the pipeline against bundled fixtures
 ```
 

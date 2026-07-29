@@ -1280,14 +1280,6 @@ def test_reader_virtualizes_pages_with_eviction(client):
     assert "canvas.width = canvas.height = 0;" in body
 
 
-class _Fetched:
-    """A fetch result double for the stage/reader endpoints."""
-    def __init__(self, content):
-        self.ok = True
-        self.content = content
-        self.reason = None
-
-
 PDF_BYTES = b"%PDF-1.7\nreader test\n"
 
 
@@ -2105,55 +2097,18 @@ def test_reader_can_copy_highlights(client):
     assert "highlightsMarkdown" in body
 
 
-# --- save for offline (stage on demand) ---------------------------------------
 
 
-def test_stage_downloads_the_oa_pdf_and_reuses_it(seeded, tmp_path):
-    # An accepted OA paper, no local copy yet.
-    with Ledger(seeded) as led:
-        led.record(AlertPaper(title="OA Paper", year=2026,
-                              url="https://arxiv.org/pdf/2601.5"))
-        led.decide("OA Paper", Decision.ACCEPTED)
-        key = [p.key for p in led.accepted_all() if p.title == "OA Paper"][0]
-
-    staging = tmp_path / "staging"
-    pdf = b"%PDF-1.7\noffline copy\n%%EOF"
-    c = TestClient(create_app(seeded, staging_path=staging,
-                              pdf_fetcher=lambda cands: _Fetched(pdf)))
-    r = c.post(f"/api/papers/{key}/stage")
-    assert r.status_code == 200 and r.json()["staged"] is True
-    with Ledger(seeded) as led:
-        name = led.get(key).staged_name
-    assert name and (staging / name).read_bytes() == pdf
-
-
-def test_stage_is_a_noop_once_saved(seeded, tmp_path):
-    with Ledger(seeded) as led:
-        led.record(AlertPaper(title="OA", year=2026, url="https://arxiv.org/pdf/2601.6"))
-        led.decide("OA", Decision.ACCEPTED)
-        key = [p.key for p in led.accepted_all() if p.title == "OA"][0]
-    staging = tmp_path / "s"
-    calls = []
-    def fetch(c):
-        calls.append(1); return _Fetched(b"%PDF-1.7\nx\n%%EOF")
-    c = TestClient(create_app(seeded, staging_path=staging, pdf_fetcher=fetch))
-    c.post(f"/api/papers/{key}/stage")
-    c.post(f"/api/papers/{key}/stage")     # already saved -> no second fetch
-    assert len(calls) == 1
-
-
-def test_stage_404_when_no_pdf_to_download(seeded, tmp_path):
-    with Ledger(seeded) as led:
-        led.record(AlertPaper(title="Closed", year=2026,
-                              url="https://dl.acm.org/doi/abs/10.1/x"))
-        led.decide("Closed", Decision.ACCEPTED)
-        key = [p.key for p in led.accepted_all() if p.title == "Closed"][0]
-    c = TestClient(create_app(seeded, staging_path=tmp_path / "s"))
-    assert c.post(f"/api/papers/{key}/stage").status_code == 404
-
-
-def test_reader_has_a_save_for_offline_button(client):
+def test_reader_saves_pdf_to_the_device_for_offline(client):
     body = client.get("/").text
     assert 'id="rddownload"' in body
     assert "function updateDownloadBtn" in body
-    assert "/stage`, {method: 'POST'})" in body
+    # Cached to the device (IndexedDB), not the server; reuses the loaded bytes.
+    assert "idbSet(pdfCacheKey(paper.key), await readerDoc.getData())" in body
+    # The reader prefers the on-device copy, so it reads offline.
+    assert "const cached = await idbGet(pdfCacheKey(paper.key));" in body
+    assert "readerDoc = await lib.getDocument({data}).promise;" in body
+    # At upload, the device copy is handed to the server (no re-fetch).
+    assert "{method: 'POST', body: form}" in body
+    # No server-side stage endpoint any more.
+    assert "/stage`, {method: 'POST'})" not in body
