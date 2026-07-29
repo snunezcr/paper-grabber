@@ -536,6 +536,59 @@ def create_app(
         staged.unlink(missing_ok=True)
         return {"key": key, "staged": False}
 
+    @app.post("/api/papers/{key}/stage")
+    def stage_pdf(key: str) -> dict[str, Any]:
+        """Download a paper's open-access PDF to local staging.
+
+        Triggered from the reader's "save for offline" control. Keeping the file
+        locally means a later upload sends this copy instead of fetching again,
+        and it's there even if the open-access link later rots. A no-op for a
+        paper already in Drive, or one already staged.
+        """
+        from .uploader import pdf_candidates_for
+
+        with open_ledger() as led:
+            paper = led.get(key)
+            if paper is None:
+                raise HTTPException(status_code=404, detail="no such paper")
+            if paper.drive_file_id:
+                return {"key": key, "staged": True, "detail": "already in Drive"}
+            existing = paper.staged_name
+            view = paper_view(paper)
+            candidates = pdf_candidates_for(paper)
+
+        staging = StagingArea(staging_path or (ledger_path.parent / "staging"))
+        if existing and staging.path_for(existing).exists():
+            return {"key": key, "staged": True, "detail": "already saved"}
+
+        if not candidates:
+            raise HTTPException(
+                status_code=404,
+                detail="no open-access PDF to download; attach one in Filing instead",
+            )
+
+        if pdf_fetcher is not None:
+            fetched = pdf_fetcher(candidates)
+        else:
+            from .fetch import download_first_available, make_client
+
+            with make_client() as http:
+                fetched = download_first_available(candidates, client=http)
+        if not fetched.ok:
+            raise HTTPException(
+                status_code=502, detail=f"could not download the PDF: {fetched.reason}"
+            )
+
+        # Reuse the existing name when re-staging, so nothing is orphaned.
+        name = existing or deduplicate_filename(
+            pdf_filename(view["title"], view["year"]),
+            {p.name for p in staging.pending()},
+        )
+        staging.stage(name, fetched.content)
+        with open_ledger() as led:
+            led.set_staged(key, name)
+        return {"key": key, "staged": True, "name": name}
+
     @app.post("/api/papers/{key}/verify")
     def verify(key: str) -> dict[str, Any]:
         """Check a processed paper is still in Drive; requeue it if not."""
@@ -800,6 +853,7 @@ def create_app(
                     "reading",
                     "corpus",
                     "annotations",
+                    "stage",
                 }
             ),
         }

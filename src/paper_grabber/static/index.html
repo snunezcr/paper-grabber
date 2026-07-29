@@ -527,6 +527,7 @@
      in the text modes; the pen reaches it once the text layer is switched off. */
   .rdink { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; pointer-events: none; }
   #reader.mode-draw .rdtext, #reader.mode-erase .rdtext { pointer-events: none; }
+  #rddownload.saved { color: var(--accept); border-color: var(--accept); }
   #reader.mode-draw #rddoc { cursor: crosshair; }
   #reader.mode-erase #rddoc { cursor: none; }
   /* The area eraser's cursor: a circle the size of its reach, following the pen. */
@@ -880,6 +881,7 @@
     <button id="rdout" aria-label="Zoom out" data-tip="Zoom out"></button>
     <button id="rdin" aria-label="Zoom in" data-tip="Zoom in"></button>
     <button id="rdnotes" aria-label="Show notes" data-tip="Show or hide notes"></button>
+    <button id="rddownload" aria-label="Save for offline" data-tip="Save for offline" hidden></button>
     <button id="rdfull" aria-label="Full screen" data-tip="Full screen"></button>
     <button id="rdread" aria-label="Mark as read" data-tip="Mark as read"></button>
     <button id="rdclose" aria-label="Close reader" data-tip="Close"></button>
@@ -980,6 +982,7 @@ const ICONS = {
   highlighter: '<path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/>',
   'pen-line': '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
   eraser: '<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
   'file-up': '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M12 12v6"/><path d="m15 15-3-3-3 3"/>',
   'trash-2': '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>',
   'folder-input':
@@ -1043,6 +1046,7 @@ function paintStaticIcons() {
   map['#rdin'] = 'zoom-in';
   map['#rdout'] = 'zoom-out';
   map['#rdnotes'] = 'pencil';
+  map['#rddownload'] = 'download';
   map['#rdfull'] = 'maximize';
   map['#rdread'] = 'check';
   map['.rdmode[data-mode="select"]'] = 'mouse-pointer';
@@ -1126,7 +1130,7 @@ let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               undoStack: [] };
 
 // Capabilities this page expects the server to have.
-const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf', 'reading', 'corpus', 'annotations'];
+const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf', 'reading', 'corpus', 'annotations', 'stage'];
 
 // A tiny IndexedDB key/value store for the recall corpus, which can outgrow
 // localStorage's ~5 MB. Best-effort: if IndexedDB is unavailable or errors, the
@@ -3020,6 +3024,7 @@ async function openReader(paper) {
   $('#reader').hidden = false;
   readerScale = null;
   updateFullBtn();
+  updateDownloadBtn(paper);
   markReading(paper);
 
   // Highlights load before the pages render, so each page paints them on first
@@ -3704,6 +3709,35 @@ async function markReading(paper) {
     if (state.tab === 'reading') loadReading();
   } catch (e) { /* non-fatal: it simply stays unread */ }
 }
+
+// Save the PDF to the server's staging for offline reading, and so a later
+// upload sends this copy instead of fetching it again. Hidden once in Drive,
+// or when there's nothing open-access to fetch and nothing attached.
+function updateDownloadBtn(paper) {
+  const btn = $('#rddownload');
+  if (paper.uploaded || (!paper.has_oa_pdf && !paper.staged)) { btn.hidden = true; return; }
+  btn.hidden = false;
+  const saved = paper.staged;
+  btn.classList.toggle('saved', saved);
+  const label = saved ? 'Saved locally — will be used for upload' : 'Save for offline';
+  btn.setAttribute('aria-label', label);
+  btn.setAttribute('data-tip', label);
+}
+
+$('#rddownload').addEventListener('click', async () => {
+  const paper = state.readerPaper;
+  if (!paper || paper.staged) return;   // already held locally
+  const btn = $('#rddownload');
+  btn.disabled = true;
+  try {
+    await api(`/api/papers/${encodeURIComponent(paper.key)}/stage`, {method: 'POST'});
+    paper.staged = true;
+    updateDownloadBtn(paper);
+    showNotice('Saved for offline — it will be used for upload');
+  } catch (e) {
+    showError(`Could not save the PDF: ${e.message}`);
+  } finally { btn.disabled = false; }
+});
 
 $('#rdread').addEventListener('click', async () => {
   const paper = state.readerPaper;
