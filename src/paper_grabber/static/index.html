@@ -481,9 +481,20 @@
     top: 0; width: 100%; height: 100%;
   }
   .rdtop {
+    position: relative;
     display: flex; align-items: center; gap: .5rem; flex: 0 0 auto;
     padding: .45rem .75rem;
     border-bottom: 1px solid var(--line); background: var(--card);
+  }
+  /* Reading progress: a thin strip pinned to the bar's lower edge, its fill
+     tracking the furthest page reached. Discreet, but a glance says how far in. */
+  #rdprog {
+    position: absolute; left: 0; right: 0; bottom: -1px; height: 3px;
+    background: var(--line);
+  }
+  #rdprog > i {
+    display: block; height: 100%; width: 0;
+    background: var(--accent); transition: width .18s ease;
   }
   .rdtitle {
     flex: 1; min-width: 0; font-size: .95rem; font-weight: 600;
@@ -885,6 +896,7 @@
     <button id="rdfull" aria-label="Full screen" data-tip="Full screen"></button>
     <button id="rdread" aria-label="Mark as read" data-tip="Mark as read"></button>
     <button id="rdclose" aria-label="Close reader" data-tip="Close"></button>
+    <div id="rdprog" aria-hidden="true"><i></i></div>
   </div>
   <div class="rdtools">
     <button class="rdmode" data-mode="select" aria-label="Select text" data-tip="Select text"></button>
@@ -3016,6 +3028,35 @@ let readerDoc = null;         // the loaded PDFDocumentProxy
 let readerScale = null;       // null means fit-width
 let renderObs = null;         // renders a page as it nears the viewport
 let keepObs = null;           // releases a rendered page once it is far away
+let readFurthest = 0;         // deepest page reached this session -> read %
+
+// The reading indicator advances with the furthest page the reader has
+// scrolled to (never backwards), and shows both the fill and a "· NN%" readout.
+// The current page is the one crossing the viewport's middle, computed from the
+// page elements' positions -- which work whether a page is rendered or still a
+// placeholder, since both carry data-page.
+function updateReadProgress() {
+  if (!readerDoc || $('#reader').hidden) return;
+  const wrap = $('#rddoc');
+  const pages = wrap.querySelectorAll('[data-page]');
+  if (!pages.length) return;
+  const mid = wrap.getBoundingClientRect().top + wrap.clientHeight / 2;
+  let cur = 1;
+  for (const el of pages) {
+    if (el.getBoundingClientRect().top <= mid) cur = Number(el.dataset.page) || cur;
+  }
+  if (cur > readFurthest) readFurthest = cur;
+  const pct = Math.min(100, Math.round(readFurthest / readerDoc.numPages * 100));
+  $('#rdprog').firstElementChild.style.width = `${pct}%`;
+  $('#rdprog').title = `${pct}% read (through page ${readFurthest})`;
+  $('#rdpages').textContent = `${readerDoc.numPages} pages · ${pct}%`;
+}
+let readProgQueued = false;
+function queueReadProgress() {
+  if (readProgQueued) return;
+  readProgQueued = true;
+  requestAnimationFrame(() => { readProgQueued = false; updateReadProgress(); });
+}
 
 async function loadPdfjs() {
   if (pdfjs) return pdfjs;
@@ -3026,6 +3067,8 @@ async function loadPdfjs() {
 
 async function openReader(paper) {
   state.readerPaper = paper;
+  readFurthest = 0;
+  $('#rdprog').firstElementChild.style.width = '0';
   $('#rdtitle').textContent = paper.title;
   $('#rdpages').textContent = '';
   $('#rdnote').value = paper.note || '';
@@ -3068,6 +3111,7 @@ async function openReader(paper) {
     }
     $('#rdpages').textContent = `${readerDoc.numPages} pages`;
     await layoutPages();
+    updateReadProgress();
   } catch (e) {
     $('#rddoc').replaceChildren(Object.assign(document.createElement('div'),
       {className: 'note', textContent: `Could not open the PDF: ${e.message}`}));
@@ -3440,6 +3484,9 @@ function setReaderMode(mode) {
   if (mode !== 'highlight') { $('#rdhltools').hidden = true; state.hlRange = null; }
   if (mode !== 'erase') $('#rderaser').hidden = true;
 }
+
+// Reading progress follows the scroll, throttled to a frame.
+$('#rddoc').addEventListener('scroll', queueReadProgress, {passive: true});
 
 // ---------- freehand drawing ----------
 // Pen (or mouse) draws; a finger scrolls -- exactly what the stylus is for.

@@ -44,6 +44,8 @@ metadata APIs it queries and the Drive folder you pick.
 - **Save to this device** from the reader stores the PDF in the browser
   (IndexedDB) so it reads offline; the copy is handed to the server at upload
   time so the paper isn't fetched again.
+- **Reading progress** in the reader: a thin strip under the top bar, with a
+  `· NN%` readout, tracks the furthest page you've reached in the document.
 - **Notes** written while filing become the file's description in Drive.
 - **Highlighting** in the reader: select text to highlight it; highlights are
   stored per paper, their quotes join Library recall, and they mirror onto the
