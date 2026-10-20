@@ -1,11 +1,15 @@
 """Write a filed paper into a Zotero library.
 
 One item per paper, built from what enrichment already knows, plus two
-children where there is anything to put in them: the filing note, and a link
-to the PDF in Drive. The PDF itself is deliberately not uploaded -- this app
-keeps files in Drive on purpose, and Zotero's own storage is small and paid
-for -- so what Zotero gets is a reference that clicks through to the copy that
-already exists.
+children where there is anything to put in them: a note holding the filing note
+and the highlights made while reading, and a link to the PDF in Drive. The PDF
+itself is deliberately not uploaded -- this app keeps files in Drive on
+purpose, and Zotero's own storage is small and paid for -- so what Zotero gets
+is a reference that clicks through to the copy that already exists.
+
+The highlights go in a note rather than as Zotero annotations, which exist only
+on a stored PDF attachment and cannot hang off a linked URL. A note is the one
+form that survives the file staying in Drive.
 
 Metadata is best-effort in the same way bibtex.py is: Scholar gives initials,
 OpenAlex gives full names, and plenty of papers have no venue at all. The one
@@ -153,17 +157,96 @@ def _note_html(text: str) -> str:
     )
 
 
+def highlights_in_reading_order(
+    annotations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Highlights, ordered the way the reader lists them.
+
+    Page first, then down the page by the top of the highlight -- rects are
+    normalized to the page box, so the smallest y is the highest one. Ink
+    strokes are dropped: a drawing has no text to carry across.
+
+    The same ordering as the reader's highlight list and its Markdown export,
+    so the three agree about what "the highlights" are.
+    """
+    highlights = [
+        a for a in annotations if isinstance(a, dict) and a.get("type") != "ink"
+    ]
+
+    def position(a: dict[str, Any]) -> tuple[float, float]:
+        tops = [
+            r[1]
+            for r in (a.get("rects") or [])
+            if isinstance(r, (list, tuple))
+            and len(r) > 1
+            and isinstance(r[1], (int, float))
+        ]
+        page = a.get("page")
+        return (
+            float(page) if isinstance(page, (int, float)) else 0.0,
+            min(tops) if tops else 0.0,
+        )
+
+    return sorted(highlights, key=position)
+
+
+def _highlights_html(highlights: list[dict[str, Any]]) -> str:
+    """The highlights as a block of note HTML, quote then comment.
+
+    A highlight with neither text nor comment is skipped. The reader shows
+    those as "(no text)" because it can still scroll to them; in a reference
+    manager, where the page is gone, they would be noise.
+    """
+    parts: list[str] = []
+    for h in highlights:
+        quote = (h.get("quote") or "").strip()
+        comment = (h.get("comment") or "").strip()
+        if not quote and not comment:
+            continue
+        page = h.get("page")
+        where = (
+            f" (p. {html_escape(str(page))})"
+            if isinstance(page, (int, float))
+            else ""
+        )
+        if quote:
+            parts.append(
+                f"<blockquote><p>{html_escape(quote)}{where}</p></blockquote>"
+            )
+            if comment:
+                parts.append(f"<p>— {html_escape(comment)}</p>")
+        else:
+            parts.append(f"<p>— {html_escape(comment)}{where}</p>")
+    if not parts:
+        return ""
+    return "<h2>Highlights</h2>" + "".join(parts)
+
+
 def child_items(view: dict[str, Any], *, parent_key: str) -> list[dict[str, Any]]:
-    """The note and the Drive link, for whichever of them exists."""
+    """The note and the Drive link, for whichever of them exists.
+
+    One note, not two: the filing note and the highlights are both things the
+    user wrote about this paper, and Zotero shows a child note by its first
+    line, so a second one would just be another row to open.
+    """
     children: list[dict[str, Any]] = []
 
+    sections = []
     note = (view.get("note") or "").strip()
     if note:
+        sections.append(_note_html(note))
+    highlights = _highlights_html(
+        highlights_in_reading_order(view.get("annotations") or [])
+    )
+    if highlights:
+        sections.append(highlights)
+
+    if sections:
         children.append(
             {
                 "itemType": "note",
                 "parentItem": parent_key,
-                "note": _note_html(note),
+                "note": "".join(sections),
                 "tags": [],
                 "relations": {},
             }
@@ -288,6 +371,12 @@ class ZoteroLibrary:
         parent's key, and Zotero assigns that key. If they fail the item still
         stands, so the failure is reported as a warning rather than raised --
         losing the reference over a missing note would be the worse outcome.
+
+        The note is a snapshot of the moment it was saved. A paper is written
+        once -- the card then says it is already in the library -- so highlights
+        made afterwards stay in the reader. Carrying them across later would
+        mean editing a note at Zotero, and nothing distinguishes the note this
+        wrote from one the user typed there by hand.
         """
         keys = self._post([to_item(view)])
         if not keys or not keys[0]:

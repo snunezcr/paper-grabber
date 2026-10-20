@@ -129,8 +129,16 @@ involves no redirect at all.
 
 Once an account is connected, any paper that has reached Drive gets a **Save to
 Zotero** button on its card — in **Stored**, and in **Filing** the moment an
-upload finishes. It creates one item with the paper's metadata, the filing note
-as a child note, and a link through to the PDF in Drive.
+upload finishes. It creates one item with the paper's metadata, a child note
+holding the filing note and your highlights, and a link through to the PDF in
+Drive.
+
+Highlights go in the note as quotes with their page numbers, in reading order —
+the same order the reader lists them in. Zotero's own annotations only exist on
+a PDF it stores itself, so a note is the form that survives the file staying in
+Drive. The button says how many highlights it would take: a paper is written
+once, so highlights made *after* saving stay in the reader. Read first, save
+after.
 
 The PDF itself is not uploaded to Zotero: this app keeps files in Drive by
 design, and Zotero's own storage is small and paid for. What Zotero gets is a

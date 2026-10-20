@@ -42,11 +42,12 @@ metadata APIs it queries and the Drive folder you pick.
   Zotero before it is stored, and a key short of a permission says so rather
   than failing at the first write.
 - **Save to Zotero** from the card of any paper that reached Drive: one item
-  with the metadata, the filing note as a child note, and a link through to
-  the PDF in Drive. An arXiv venue becomes a `preprint`, a proceedings a
-  `conferencePaper`. Scholar's two-line snippet is never passed off as an
-  abstract. The item key is recorded, so the card shows it is already there
-  instead of offering to save a duplicate.
+  with the metadata, a child note holding the filing note and your highlights
+  as quotes in reading order, and a link through to the PDF in Drive. An arXiv
+  venue becomes a `preprint`, a proceedings a `conferencePaper`. Scholar's
+  two-line snippet is never passed off as an abstract. The item key is
+  recorded, so the card shows it is already there instead of offering to save a
+  duplicate.
 - **Downloads** open-access PDFs, validating them by content rather than by
   `Content-Type`, and names them `YYYY Title.pdf`.
 - **Uploads to Drive** and deletes the local copy only after Drive confirms a
@@ -58,8 +59,9 @@ metadata APIs it queries and the Drive folder you pick.
   `· NN%` readout, tracks the furthest page you've reached in the document.
 - **Notes** written while filing become the file's description in Drive.
 - **Highlighting** in the reader: select text to highlight it; highlights are
-  stored per paper, their quotes join Library recall, and they mirror onto the
-  Drive file's metadata (appProperties) so they travel with it.
+  stored per paper, their quotes join Library recall and the Zotero note, and
+  they mirror onto the Drive file's metadata (appProperties) so they travel
+  with it.
 - **Drawing** with the pen: a Select / Highlight / Draw / Erase toolbar; in Draw
   mode the stylus inks and a finger still scrolls. Ink is stored and mirrored
   like highlights, and scales with zoom.
@@ -169,7 +171,7 @@ anything that matters:
 ## Development
 
 ```bash
-pytest                       # 774 tests, no network required
+pytest                       # 884 tests, no network required
 ./scripts/demo.sh            # drive the pipeline against bundled fixtures
 ```
 

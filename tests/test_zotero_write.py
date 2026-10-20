@@ -14,6 +14,7 @@ from paper_grabber.zotero import (
     ZoteroWriteError,
     child_items,
     creators,
+    highlights_in_reading_order,
     item_type,
     to_item,
 )
@@ -184,6 +185,106 @@ def test_a_child_item_is_not_placed_in_a_collection():
         assert "collections" not in kid
 
 
+# --- highlights ---------------------------------------------------------------
+
+
+def hl(quote, *, page=1, y=0.1, **over):
+    """A highlight of the shape the reader stores."""
+    a = {
+        "id": "h" + quote[:4],
+        "type": "highlight",
+        "page": page,
+        "rects": [[0.1, y, 0.3, 0.02]],
+        "color": "#ffd54a",
+        "quote": quote,
+    }
+    a.update(over)
+    return a
+
+
+def notes_of(v):
+    """The one note child's HTML."""
+    kids = [k for k in child_items(v, parent_key=ITEM) if k["itemType"] == "note"]
+    return kids[0]["note"] if kids else ""
+
+
+def test_highlights_come_back_in_reading_order():
+    """Page first, then down the page: what the reader's own list shows."""
+    anns = [
+        hl("third", page=2, y=0.1),
+        hl("second", page=1, y=0.8),
+        hl("first", page=1, y=0.2),
+    ]
+    assert [h["quote"] for h in highlights_in_reading_order(anns)] == [
+        "first", "second", "third",
+    ]
+
+
+def test_ink_is_not_a_highlight():
+    """A drawing has no text to carry into a reference manager."""
+    anns = [hl("kept"), {"id": "i1", "type": "ink", "page": 1, "points": [[0, 0]]}]
+    assert [h["quote"] for h in highlights_in_reading_order(anns)] == ["kept"]
+
+
+def test_a_highlight_becomes_a_quote_with_its_page():
+    html = notes_of(view(annotations=[hl("syndrome extraction", page=4)]))
+    assert "<h2>Highlights</h2>" in html
+    assert "<blockquote><p>syndrome extraction (p. 4)</p></blockquote>" in html
+
+
+def test_a_comment_on_a_highlight_follows_its_quote():
+    html = notes_of(view(annotations=[hl("ancilla loss", comment="check Fig. 3")]))
+    assert html.endswith(
+        "<blockquote><p>ancilla loss (p. 1)</p></blockquote><p>— check Fig. 3</p>"
+    )
+
+
+def test_a_quote_is_escaped_into_the_note_html():
+    html = notes_of(view(annotations=[hl("<b>A</b> & B")]))
+    assert "&lt;b&gt;A&lt;/b&gt; &amp; B" in html
+    assert "<b>" not in html
+
+
+def test_a_highlight_with_no_text_at_all_is_skipped():
+    """The reader can scroll to one; in Zotero, where the page is gone, it is noise."""
+    html = notes_of(view(annotations=[hl(""), hl("real")]))
+    assert "real" in html
+    assert html.count("<blockquote>") == 1
+
+
+def test_a_comment_with_no_quote_is_still_carried():
+    html = notes_of(view(annotations=[hl("", comment="the whole figure")]))
+    assert "<p>— the whole figure (p. 1)</p>" in html
+
+
+def test_the_filing_note_and_the_highlights_share_one_note():
+    """Zotero shows a child note by its first line; a second row adds nothing."""
+    kids = child_items(view(annotations=[hl("quoted bit")]), parent_key=ITEM)
+    assert [k["itemType"] for k in kids] == ["note", "attachment"]
+    assert kids[0]["note"] == (
+        "<p>Worth re-reading the error-correction section.</p>"
+        "<h2>Highlights</h2>"
+        "<blockquote><p>quoted bit (p. 1)</p></blockquote>"
+    )
+
+
+def test_highlights_alone_are_enough_for_a_note():
+    html = notes_of(view(note=None, annotations=[hl("quoted bit")]))
+    assert html.startswith("<h2>Highlights</h2>")
+
+
+def test_a_paper_with_no_highlights_gets_no_highlights_heading():
+    for anns in ([], None, [{"id": "i1", "type": "ink", "page": 1}]):
+        html = notes_of(view(annotations=anns))
+        assert html == "<p>Worth re-reading the error-correction section.</p>"
+
+
+def test_nothing_to_say_is_still_no_note():
+    assert child_items(
+        view(note=None, drive_url=None, annotations=[]), parent_key=ITEM
+    ) == []
+
+
 # --- the library client -------------------------------------------------------
 
 
@@ -294,7 +395,7 @@ def test_no_write_error_ever_carries_the_key():
 # --- the endpoint -------------------------------------------------------------
 
 
-def seed(path, *, uploaded=True, zotero_key=None):
+def seed(path, *, uploaded=True, zotero_key=None, annotations=None):
     """A ledger holding one accepted paper, filed and optionally in Drive."""
     with Ledger(path) as led:
         led.record(AlertPaper(
@@ -309,6 +410,8 @@ def seed(path, *, uploaded=True, zotero_key=None):
         led.decide_by_key(key, Decision.ACCEPTED)
         led.set_destination(key, "fid", "Quantum")
         led.set_note(key, "Read the appendix.")
+        if annotations:
+            led.set_annotations(key, annotations)
         if uploaded:
             led.set_uploaded(key, "drive-file-id")
         if zotero_key:
@@ -366,6 +469,30 @@ def test_saving_a_filed_paper_records_the_item_on_the_ledger(app):
     assert handler.posts[0][0]["itemType"] == "preprint"
     assert handler.posts[0][0]["repository"] == "arXiv"
     assert [k["itemType"] for k in handler.posts[1]] == ["note", "attachment"]
+
+
+def test_the_highlights_reach_zotero_with_the_filing_note(app):
+    """The reading goes with the reference, not just the metadata."""
+    handler = write_handler()
+    client, key, _ = app(
+        handler,
+        annotations=[
+            hl("measurement-free correction", page=3, y=0.4),
+            hl("bosonic ancilla loss", page=2, y=0.1),
+            {"id": "i1", "type": "ink", "page": 1, "points": [[0, 0], [1, 1]]},
+        ],
+    )
+
+    assert client.post(f"/api/papers/{key}/zotero").status_code == 200
+
+    note = handler.posts[1][0]
+    assert note["itemType"] == "note"
+    assert note["note"] == (
+        "<p>Read the appendix.</p>"
+        "<h2>Highlights</h2>"
+        "<blockquote><p>bosonic ancilla loss (p. 2)</p></blockquote>"
+        "<blockquote><p>measurement-free correction (p. 3)</p></blockquote>"
+    )
 
 
 def test_saving_twice_does_not_create_a_second_item(app):
@@ -433,3 +560,11 @@ def test_a_zotero_failure_leaves_the_ledger_unmarked(app):
 def test_the_capability_is_declared(app):
     client, _, _ = app(None)
     assert "zotero-save" in client.get("/api/version").json()["capabilities"]
+
+
+def test_the_button_says_how_many_highlights_would_go_with_it(app):
+    """The note is written once, so reading first and saving after is better."""
+    client, _, _ = app(None)
+    body = client.get("/").text
+    assert "zoteroTip(p)" in body
+    assert "Save to Zotero with ${n} highlight" in body

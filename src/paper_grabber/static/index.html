@@ -2270,7 +2270,17 @@ function zoteroBtn(p) {
     return iconBtn('zotero saved', 'library', 'Already in your Zotero library',
                    'aria-disabled="true"');
   }
-  return iconBtn('zotero', 'library', 'Save to Zotero');
+  return iconBtn('zotero', 'library', zoteroTip(p));
+}
+
+// Says how many highlights would go with it. Worth naming: the note is written
+// once, so highlights made after the paper is saved stay in the reader, and the
+// count is the only hint that it is better to read first and save after.
+function zoteroTip(p) {
+  const n = (p.annotations || [])
+    .filter(a => a.type !== 'ink' && (a.quote || a.comment)).length;
+  return n ? `Save to Zotero with ${n} highlight${n === 1 ? '' : 's'}`
+           : 'Save to Zotero';
 }
 
 // `within` is where the button lives, which during construction is the action
