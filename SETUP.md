@@ -77,7 +77,49 @@ Open the app, go to **Filing**, and press **Change base folder** to browse your
 Drive and pick one. Papers are then filed into subfolders you choose from
 there.
 
-## 4. Running commands
+## 4. Connect a Zotero account (optional)
+
+Open the app, go to **Filing**, and use the Zotero row under the base folder.
+Either route ends at the same place: an API key, verified against Zotero and
+stored at `~/.config/paper-grabber/zotero.json` (mode 0600).
+
+### Paste a key — no setup
+
+1. Press **Paste a key**, then follow **Create a key on zotero.org**. The link
+   pre-ticks the permissions this app asks for — library read, write, and
+   notes — so you only need to confirm and copy.
+2. Paste it into the field and press **Connect**. The key is checked against
+   Zotero before it is saved, so a truncated paste fails there and then.
+
+Revoke a key any time at <https://www.zotero.org/settings/keys>. Disconnecting
+in the app only forgets the key; it deliberately does not delete it at Zotero,
+since you may have made it by hand or be using it elsewhere.
+
+### Connect Zotero — one-time registration, then no typing
+
+Nicer on a tablet, because nothing has to be copied between devices.
+
+1. Register the app once at <https://www.zotero.org/oauth/apps>. For the
+   callback, use the URL the app shows in the Zotero row, e.g.
+   `http://localhost:8823/auth/zotero/callback`.
+2. Save the client key and secret to `zotero_client.json` in the repo root
+   (gitignored):
+
+   ```json
+   {"client_key": "...", "client_secret": "..."}
+   ```
+
+   Like `credentials.json`, this path is resolved against the working
+   directory, so the service must run from inside the repo.
+3. Restart the app. A **Connect Zotero** button appears next to **Paste a
+   key**; pressing it takes you to Zotero and back.
+
+**This one works from the tablet.** Zotero accepts a plain-`http` callback on
+any host, so unlike the Google sign-in there is no certificate to arrange — the
+LAN address the tablet already uses is a valid callback. Register that origin
+too if you want to connect from there.
+
+## 5. Running commands
 
 ```bash
 paper-grabber sync          # pull new alerts
@@ -87,7 +129,7 @@ paper-grabber upload        # send to Drive, delete local only once verified
 paper-grabber serve         # triage UI
 ```
 
-## 5. Running it
+## 6. Running it
 
 Everything is driven by hand. **Check now** in the app fetches new alerts and
 enriches them; the Upload button on a filed card fetches the PDF and sends it

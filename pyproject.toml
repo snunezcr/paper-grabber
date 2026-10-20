@@ -10,6 +10,10 @@ dependencies = [
     "google-api-python-client>=2.190",
     "google-auth-oauthlib>=1.2",
     "google-auth-httplib2>=0.2",
+    # Zotero's API is OAuth 1.0a; this signs the request-token and access-token
+    # calls. Already present under google-auth-oauthlib, named here because
+    # zotero_auth imports it directly.
+    "oauthlib>=3.2",
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "python-multipart>=0.0.9",

@@ -330,6 +330,30 @@
   }
   .basefolder { color: var(--muted); font-size: .9rem; }
   .linkbtn { background: none; border: 0; color: var(--accent); cursor: pointer; font-size: .9rem; min-height: 44px; padding: 0 .25rem; }
+  .linkbtn.warn { color: var(--reject); }
+
+  /* Zotero account row. Sits with the base folder because both answer the
+     same question -- where a kept paper ends up. */
+  .acctrow { margin-top: -.5rem; }
+  .acctacts { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+  .keyrow {
+    display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+    margin: 0 0 .9rem;
+  }
+  .keyrow input {
+    flex: 1 1 15rem; min-height: 44px; padding: 0 .6rem;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--card); color: var(--ink); font-size: .9rem;
+  }
+  .keyrow input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .keyrow button {
+    min-height: 44px; padding: 0 .9rem; border-radius: 10px; font-size: .9rem;
+    font-weight: 600; cursor: pointer; border: 1px solid var(--line);
+    background: var(--card); color: var(--ink);
+  }
+  .keyrow button.go { border-color: var(--accent); color: var(--accent); }
+  .keyhelp { color: var(--muted); font-size: .84rem; flex: 1 1 100%; margin: 0; }
+  .keyhelp a { color: var(--accent); }
   .filed-actions { margin-top: .5rem; align-items: center; flex-wrap: wrap; }
   .filed-actions button { min-height: 44px; font-size: .9rem; }
   .filed-actions .up { border-color: var(--accept); color: var(--accept); }
@@ -861,6 +885,25 @@
       <span class="basefolder" id="basefolder">No base folder set</span>
       <button class="linkbtn" id="setbase">Change base folder</button>
     </div>
+    <div class="filing-head acctrow">
+      <span class="basefolder" id="zotstate">Zotero not connected</span>
+      <span class="acctacts">
+        <button class="linkbtn" id="zotconnect" hidden>Connect Zotero</button>
+        <button class="linkbtn" id="zotkey">Paste a key</button>
+        <button class="linkbtn" id="zotout" hidden>Disconnect</button>
+      </span>
+    </div>
+    <div class="keyrow" id="zotkeyrow" hidden>
+      <input id="zotkeyinput" type="password" autocomplete="off" spellcheck="false"
+             placeholder="Zotero API key" aria-label="Zotero API key">
+      <button class="go" id="zotkeysave">Connect</button>
+      <button id="zotkeycancel">Cancel</button>
+      <p class="keyhelp">
+        <a id="zotnewkey" href="https://www.zotero.org/settings/keys/new"
+           target="_blank" rel="noreferrer">Create a key on zotero.org</a>
+        — the link pre-ticks the permissions this app needs, then copy the key here.
+      </p>
+    </div>
     <div id="filed-wrap" hidden>
       <div class="section-label">Ready to upload</div>
       <div id="filed"></div>
@@ -1142,7 +1185,7 @@ let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               undoStack: [] };
 
 // Capabilities this page expects the server to have.
-const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf', 'reading', 'corpus', 'annotations'];
+const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf', 'reading', 'corpus', 'annotations', 'zotero-auth'];
 
 // A tiny IndexedDB key/value store for the recall corpus, which can outgrow
 // localStorage's ~5 MB. Best-effort: if IndexedDB is unavailable or errors, the
@@ -2910,6 +2953,115 @@ function noticeSignInReturn() {
   showNotice('Signed in to Google');
 }
 
+// ---------- Zotero account ----------
+
+async function loadZotero() {
+  const label = $('#zotstate');
+  const connect = $('#zotconnect');
+  const paste = $('#zotkey');
+  const out = $('#zotout');
+  let s;
+  try {
+    s = await api('/api/zotero/status');
+  } catch (e) {
+    // An older server has no Zotero endpoints. Say nothing rather than show
+    // controls that cannot work.
+    label.textContent = '';
+    connect.hidden = paste.hidden = out.hidden = true;
+    return;
+  }
+
+  if (s.new_key_url) $('#zotnewkey').href = s.new_key_url;
+
+  // A key that cannot write is connected but no use for filing, so it offers
+  // the same controls as a fresh install plus the account it is stuck on.
+  const broken = !!s.needs_reconnect;
+  const who = s.username || (s.user_id ? `user ${s.user_id}` : 'account');
+
+  if (s.connected && !broken) {
+    label.textContent = `Zotero: ${who}`;
+    label.removeAttribute('data-tip');
+  } else if (broken) {
+    label.textContent = `Zotero: ${who} — key cannot write`;
+    label.setAttribute('data-tip',
+      'This key has read-only access. Connect again, or paste one with write access.');
+  } else {
+    label.textContent = 'Zotero not connected';
+    label.setAttribute('data-tip',
+      s.has_client ? 'Connect a Zotero account to file papers into its library'
+                   : 'Paste a Zotero API key to connect an account');
+  }
+
+  // The OAuth button appears only where it can work: with no client registered
+  // on the server it would fail at the first redirect, and a button that is
+  // certain to error is worse than no button.
+  connect.hidden = !(s.has_client && (!s.connected || broken));
+  connect.textContent = broken ? 'Connect again' : 'Connect Zotero';
+  connect.classList.toggle('warn', broken);
+  paste.hidden = !(!s.connected || broken);
+  paste.textContent = broken ? 'Paste another key' : 'Paste a key';
+  out.hidden = !s.connected;
+  if (s.connected) showKeyRow(false);
+}
+
+function showKeyRow(on) {
+  $('#zotkeyrow').hidden = !on;
+  if (on) $('#zotkeyinput').focus();
+  else $('#zotkeyinput').value = '';
+}
+
+$('#zotconnect').addEventListener('click', () => {
+  window.location.href = '/auth/zotero/start';
+});
+
+$('#zotkey').addEventListener('click', () => showKeyRow($('#zotkeyrow').hidden));
+$('#zotkeycancel').addEventListener('click', () => showKeyRow(false));
+
+$('#zotkeyinput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); $('#zotkeysave').click(); }
+  if (e.key === 'Escape') showKeyRow(false);
+});
+
+$('#zotkeysave').addEventListener('click', async () => {
+  const input = $('#zotkeyinput');
+  const key = input.value.trim();
+  if (!key) { showError('Paste the API key first.'); return; }
+  const btn = $('#zotkeysave');
+  btn.disabled = true;
+  try {
+    await api('/api/zotero/key', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({api_key: key})
+    });
+    // Clear before anything else: the key has been handed over and has no
+    // business sitting in a field on a tablet someone may put down.
+    showKeyRow(false);
+    showNotice('Zotero connected');
+    loadZotero();
+  } catch (e) {
+    showError(e.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('#zotout').addEventListener('click', async () => {
+  try {
+    await api('/api/zotero/disconnect', {method: 'POST'});
+    showNotice('Zotero disconnected');
+    loadZotero();
+  } catch (e) { showError(e.message); }
+});
+
+function noticeZoteroReturn() {
+  // The callback redirects here with ?zotero=1; strip it so a reload does not
+  // repeat the message.
+  const params = new URLSearchParams(location.search);
+  if (!params.has('zotero')) return;
+  history.replaceState({}, '', location.pathname);
+  showNotice('Zotero connected');
+}
+
 // ---------- manual mail check ----------
 
 const checkBtn = $('#check');
@@ -3978,10 +4130,12 @@ function syncSidebarVisibility() {
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 paintStaticIcons();
 noticeSignInReturn();
+noticeZoteroReturn();
 syncSidebarVisibility();
 checkServerVersion();
 resumeRefreshIfRunning();
 loadAuth();
+loadZotero();
 loadTriage();
 loadFiling();
 loadProcessed();

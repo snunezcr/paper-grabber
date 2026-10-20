@@ -6,5 +6,7 @@ __pycache__/
 # Secrets — never commit
 credentials.json
 token.json
+zotero_client.json
+zotero.json
 config.toml
 .claude/

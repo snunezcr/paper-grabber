@@ -44,6 +44,12 @@ from .oauth_web import (
     is_valid_redirect,
     redirect_hint,
 )
+from .zotero_auth import (
+    CALLBACK_PATH as ZOTERO_CALLBACK_PATH,
+    ZoteroAuth,
+    ZoteroAuthError,
+    callback_url as zotero_callback_url,
+)
 from .ledger import (
     SETTING_BASE_FOLDER_ID,
     SETTING_BASE_FOLDER_NAME,
@@ -100,11 +106,16 @@ class AnnotationsIn(BaseModel):
     annotations: list[dict[str, Any]]
 
 
+class ZoteroKeyIn(BaseModel):
+    api_key: str
+
+
 def create_app(
     ledger_path: Path,
     *,
     drive_factory=None,
     oauth: WebOAuth | None = None,
+    zotero: ZoteroAuth | None = None,
     refresh_runner: RefreshRunner | None = None,
     cache_path: Path | None = None,
     mailto: str | None = None,
@@ -115,6 +126,7 @@ def create_app(
 ) -> FastAPI:
     app = FastAPI(title="Research Stream", docs_url=None, redoc_url=None)
     auth = oauth or WebOAuth()
+    zot = zotero or ZoteroAuth()
 
     def default_source():
         """Mail source for a manual check: the signed-in account, else IMAP.
@@ -800,6 +812,7 @@ def create_app(
                     "reading",
                     "corpus",
                     "annotations",
+                    "zotero-auth",
                 }
             ),
         }
@@ -849,6 +862,63 @@ def create_app(
     @app.post("/api/auth/signout")
     def auth_signout() -> dict[str, bool]:
         return {"signed_out": auth.sign_out()}
+
+    # --- Zotero -----------------------------------------------------------------
+
+    @app.get("/api/zotero/status")
+    def zotero_status(request: Request) -> dict[str, Any]:
+        status = zot.status()
+        # Zotero allows plain http on any host, so unlike the Google callback
+        # there is nothing to validate here -- the LAN address the tablet uses
+        # is a legitimate callback. It is reported so the user can register it.
+        status["callback_uri"] = zotero_callback_url(str(request.base_url))
+        return status
+
+    @app.get("/auth/zotero/start")
+    def zotero_start(request: Request):
+        callback = zotero_callback_url(str(request.base_url))
+        try:
+            return RedirectResponse(zot.start(callback), status_code=307)
+        except ZoteroAuthError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get(ZOTERO_CALLBACK_PATH)
+    def zotero_callback(
+        request: Request,
+        oauth_token: str = "",
+        oauth_verifier: str = "",
+        denied: str = "",
+    ):
+        """Land the user back in the app, as the Google callback does."""
+        if denied or not oauth_token:
+            return HTMLResponse(
+                _failure_page(
+                    "Zotero did not authorise the connection. If you meant to "
+                    "allow it, start again from the app."
+                )
+            )
+        try:
+            zot.finish(oauth_token=oauth_token, oauth_verifier=oauth_verifier)
+        except ZoteroAuthError as exc:
+            return HTMLResponse(_failure_page(str(exc)))
+        # 303 for the same reason as the Google callback: this GET carried a
+        # single-use verifier and must not be replayed by a reload.
+        return RedirectResponse("/?zotero=1", status_code=303)
+
+    @app.post("/api/zotero/key")
+    def zotero_connect_key(body: ZoteroKeyIn) -> dict[str, Any]:
+        """Connect with a key the user made by hand."""
+        try:
+            zot.connect_with_key(body.api_key)
+        except ZoteroAuthError as exc:
+            # 400: the key the request carried is the thing that was wrong, and
+            # the message is written to be shown verbatim.
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"connected": True, **zot.status()}
+
+    @app.post("/api/zotero/disconnect")
+    def zotero_disconnect() -> dict[str, bool]:
+        return {"disconnected": zot.disconnect()}
 
     # Vendored PDF.js. Mounted rather than inlined -- 2.7 MB has no business in
     # the page -- but still same-origin, so the no-external-hosts rule holds.

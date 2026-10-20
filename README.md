@@ -37,6 +37,10 @@ metadata APIs it queries and the Drive folder you pick.
   abstracts, and the notes you wrote, whatever tab you're on.
 - **Filing** into any Drive folder, with a suggested destination based on your
   folder names and past choices.
+- **Zotero account** connected from the Filing tab, either through an in-app
+  OAuth flow or by pasting an API key. Either way the key is verified against
+  Zotero before it is stored, and a read-only key says so rather than failing
+  later. This is the account link only — nothing is written to a library yet.
 - **Downloads** open-access PDFs, validating them by content rather than by
   `Content-Type`, and names them `YYYY Title.pdf`.
 - **Uploads to Drive** and deletes the local copy only after Drive confirms a
@@ -59,6 +63,7 @@ metadata APIs it queries and the Drive folder you pick.
 - Python 3.12+
 - A Google account with Drive
 - Optional but recommended: a free [OpenAlex](https://openalex.org) API key
+- Optional: a [Zotero](https://www.zotero.org) account to connect
 
 ## Install
 
