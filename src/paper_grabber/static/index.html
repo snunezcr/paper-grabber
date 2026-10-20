@@ -385,6 +385,10 @@
 
   .filed-actions .note.has-note { border-color: var(--accent); color: var(--accent); }
   .filed-actions .recover { border-color: var(--accept); color: var(--accept); }
+  /* A paper already in Zotero: the same glyph, settled rather than offered. */
+  .filed-actions .zotero.saved {
+    border-color: var(--accept); color: var(--accept); opacity: 1;
+  }
   #filebar .iconbtn { padding: 0 .9rem; }
   .filed-actions .cardstatus {
     display: inline-flex; align-items: center; font-size: .85rem;
@@ -1070,6 +1074,7 @@ const ICONS = {
   'book-open': '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
   'zoom-in': '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6"/><path d="M8 11h6"/>',
   'zoom-out': '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/><path d="M8 11h6"/>',
+  library: '<path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/>',
   'chevron-left': '<path d="m15 18-6-6 6-6"/>',
   'chevron-right': '<path d="m9 18 6-6-6-6"/>',
 };
@@ -1195,7 +1200,7 @@ let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               undoStack: [] };
 
 // Capabilities this page expects the server to have.
-const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf', 'reading', 'corpus', 'annotations', 'zotero-auth'];
+const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf', 'reading', 'corpus', 'annotations', 'zotero-auth', 'zotero-save'];
 
 // A tiny IndexedDB key/value store for the recall corpus, which can outgrow
 // localStorage's ~5 MB. Best-effort: if IndexedDB is unavailable or errors, the
@@ -1938,7 +1943,9 @@ function filingCard(p, {selectable}) {
       actions.innerHTML = `
         <span class="done">In Drive</span>
         <span class="cardstatus" hidden></span>
+        ${zoteroBtn(p)}
         ${iconBtn('cite', 'quote', 'Copy BibTeX')}`;
+      wireZotero(actions, p, el);
       actions.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
     } else {
       actions.innerHTML = `
@@ -2233,14 +2240,78 @@ function processedCard(p) {
       ${iconBtn('verify', 'refresh-cw', 'Check it is still in Drive')}
       <span class="done">${p.dest_folder_name ? '→ ' + esc(p.dest_folder_name) : 'In Drive'}</span>
       <span class="cardstatus" hidden></span>
+      ${zoteroBtn(p)}
       ${iconBtn('cite', 'quote', 'Copy BibTeX')}
     </div>`;
   wireAbstract(el);
   wirePdfLink(el, p);
   el.querySelector('.verify').addEventListener('click', () => verifyOne(p, el));
   el.querySelector('.read')?.addEventListener('click', () => openReader(p));
+  wireZotero(el, p);
   el.querySelector('.cite').addEventListener('click', () => copyCitation(p, el));
   return el;
+}
+
+// ---------- save to Zotero ----------
+
+// Offered only on a paper that reached Drive, and only while an account with
+// write access is connected: the item links through to the stored PDF, so the
+// reference is worth keeping exactly when the file exists.
+function zoteroOffered(p) {
+  const z = state.zotero;
+  return !!(p.uploaded && z && z.connected && !z.needs_reconnect);
+}
+
+function zoteroBtn(p) {
+  if (!zoteroOffered(p)) return '';
+  if (p.in_zotero) {
+    // Not `disabled`: a disabled button stops firing the pointer events the
+    // tooltip rides on, which is the only thing that explains the state.
+    return iconBtn('zotero saved', 'library', 'Already in your Zotero library',
+                   'aria-disabled="true"');
+  }
+  return iconBtn('zotero', 'library', 'Save to Zotero');
+}
+
+// `within` is where the button lives, which during construction is the action
+// row rather than the card it is about to be appended to; `card` is what the
+// status line and the repaint belong to.
+function wireZotero(within, p, card = within) {
+  within.querySelector('.zotero:not(.saved)')
+    ?.addEventListener('click', () => saveToZotero(p, card));
+}
+
+async function saveToZotero(paper, card) {
+  const button = card.querySelector('.zotero');
+  button.disabled = true;
+  cardStatus(card, 'Saving to Zotero…');
+  try {
+    const r = await api(`/api/papers/${encodeURIComponent(paper.key)}/zotero`, {
+      method: 'POST'
+    });
+    paper.in_zotero = true;
+    paper.zotero_item_key = r.item_key;
+    button.classList.add('saved');
+    button.setAttribute('data-tip', 'Already in your Zotero library');
+    button.setAttribute('aria-label', 'Already in your Zotero library');
+    // The item exists either way; a child that failed is worth saying out
+    // loud, because the note or the Drive link is what is missing from it.
+    if (r.warnings?.length) {
+      cardStatus(card, `Saved, but: ${r.warnings.join('; ')}`, {bad: true});
+    } else {
+      cardStatus(card, r.already ? 'Already in Zotero' : 'Saved to Zotero');
+    }
+  } catch (e) {
+    button.disabled = false;
+    cardStatus(card, `Could not save: ${e.message}`, {bad: true});
+  }
+}
+
+// The button's presence depends on the Zotero connection, which loads on its
+// own schedule, so the lists repaint once it is known.
+function refreshZoteroButtons() {
+  if (state.processedPapers?.length) renderProcessed();
+  if (state.filing) renderFiling();
 }
 
 async function verifyOne(paper, card) {
@@ -2985,6 +3056,7 @@ async function loadZotero() {
     $('#zotrow').hidden = true;
     $('#zotkeyrow').hidden = true;
     state.zotero = null;
+    refreshZoteroButtons();
     return;
   }
 
@@ -3029,6 +3101,7 @@ async function loadZotero() {
     if (broken) showError(`Zotero connected, but this key lacks ${lacks}. Create one with those permissions.`);
     else if (s.connected) showNotice(`Zotero connected: ${who}`);
   }
+  refreshZoteroButtons();
 }
 
 function showKeyRow(on) {

@@ -86,6 +86,13 @@ _ANNOTATION_COLUMNS = """
 ALTER TABLE papers ADD COLUMN annotations TEXT;
 """
 
+# The Zotero item a paper was saved as. Held so the card can show it is
+# already there rather than offering to save it a second time -- Zotero's
+# write token only dedupes within a minute, so the guard has to be durable.
+_ZOTERO_COLUMNS = """
+ALTER TABLE papers ADD COLUMN zotero_item_key TEXT;
+"""
+
 SETTING_BASE_FOLDER_ID = "base_folder_id"
 SETTING_BASE_FOLDER_NAME = "base_folder_name"
 
@@ -109,6 +116,7 @@ class LedgerPaper:
     read_state: str | None = None
     pinned: bool = False
     annotations: list[dict[str, Any]] | None = None
+    zotero_item_key: str | None = None
 
 
 def _scholar_pdf_url(url: str | None) -> bool:
@@ -195,6 +203,10 @@ def paper_view(p: LedgerPaper) -> dict[str, Any]:
         "pinned": bool(p.pinned),
         # Highlights + their notes; recall searches their quotes.
         "annotations": p.annotations or [],
+        # Whether this paper is already a Zotero item, so the card can say so
+        # rather than offer to save a duplicate.
+        "zotero_item_key": p.zotero_item_key,
+        "in_zotero": p.zotero_item_key is not None,
         # Opens the PDF in Drive, which is where reading and annotation happen.
         "drive_url": (
             f"https://drive.google.com/file/d/{p.drive_file_id}/view"
@@ -220,7 +232,12 @@ class Ledger:
         triaged a hundred papers should not lose them to a schema change.
         """
         have = {r[1] for r in self._db.execute("PRAGMA table_info(papers)")}
-        for block in (_DESTINATION_COLUMNS, _READING_COLUMNS, _ANNOTATION_COLUMNS):
+        for block in (
+            _DESTINATION_COLUMNS,
+            _READING_COLUMNS,
+            _ANNOTATION_COLUMNS,
+            _ZOTERO_COLUMNS,
+        ):
             for statement in block.strip().split(";"):
                 statement = statement.strip()
                 if not statement:
@@ -373,7 +390,8 @@ class Ledger:
         """
         sql = (
             "SELECT key, title, payload, decision, first_seen, decided_at,"
-            " dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note"
+            " dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note,"
+            " read_state, pinned, annotations, zotero_item_key"
             " FROM papers WHERE decision = ? AND drive_file_id IS NULL"
         )
         if filed is True:
@@ -398,7 +416,8 @@ class Ledger:
         """Papers safely in Drive, most recent first."""
         rows = self._db.execute(
             "SELECT key, title, payload, decision, first_seen, decided_at,"
-            " dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note"
+            " dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note,"
+            " read_state, pinned, annotations, zotero_item_key"
             " FROM papers WHERE drive_file_id IS NOT NULL"
             " ORDER BY uploaded_at DESC",
         ).fetchall()
@@ -413,7 +432,7 @@ class Ledger:
         rows = self._db.execute(
             "SELECT key, title, payload, decision, first_seen, decided_at,"
             " dest_folder_id, dest_folder_name, staged_name, drive_file_id,"
-            " uploaded_at, note, read_state, pinned, annotations"
+            " uploaded_at, note, read_state, pinned, annotations, zotero_item_key"
             " FROM papers WHERE decision = ? ORDER BY decided_at DESC",
             (Decision.ACCEPTED.value,),
         ).fetchall()
@@ -472,6 +491,14 @@ class Ledger:
         self._db.commit()
         return cur.rowcount > 0
 
+    def set_zotero_item(self, key: str, item_key: str | None) -> bool:
+        """Record the Zotero item a paper was saved as, or clear it."""
+        cur = self._db.execute(
+            "UPDATE papers SET zotero_item_key = ? WHERE key = ?", (item_key, key)
+        )
+        self._db.commit()
+        return cur.rowcount > 0
+
     def clear_uploaded(self, key: str) -> bool:
         """Forget that a paper reached Drive, keeping its destination.
 
@@ -509,7 +536,7 @@ class Ledger:
 
     def get(self, key: str) -> LedgerPaper | None:
         row = self._db.execute(
-            "SELECT key, title, payload, decision, first_seen, decided_at, dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note, read_state, pinned, annotations"
+            "SELECT key, title, payload, decision, first_seen, decided_at, dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note, read_state, pinned, annotations, zotero_item_key"
             " FROM papers WHERE key = ?",
             (key,),
         ).fetchone()
@@ -614,6 +641,7 @@ class Ledger:
             read_state=r[12] if len(r) > 12 else None,
             pinned=bool(r[13]) if len(r) > 13 else False,
             annotations=json.loads(r[14]) if len(r) > 14 and r[14] else None,
+            zotero_item_key=r[15] if len(r) > 15 else None,
         )
 
     def close(self) -> None:

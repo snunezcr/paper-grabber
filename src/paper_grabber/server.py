@@ -49,7 +49,9 @@ from .zotero_auth import (
     ZoteroAuth,
     ZoteroAuthError,
     callback_url as zotero_callback_url,
+    missing_access,
 )
+from .zotero import ZoteroLibrary, ZoteroWriteError
 from .ledger import (
     SETTING_BASE_FOLDER_ID,
     SETTING_BASE_FOLDER_NAME,
@@ -116,6 +118,7 @@ def create_app(
     drive_factory=None,
     oauth: WebOAuth | None = None,
     zotero: ZoteroAuth | None = None,
+    zotero_factory=None,
     refresh_runner: RefreshRunner | None = None,
     cache_path: Path | None = None,
     mailto: str | None = None,
@@ -813,6 +816,7 @@ def create_app(
                     "corpus",
                     "annotations",
                     "zotero-auth",
+                    "zotero-save",
                 }
             ),
         }
@@ -931,6 +935,61 @@ def create_app(
     @app.post("/api/zotero/disconnect")
     def zotero_disconnect() -> dict[str, bool]:
         return {"disconnected": zot.disconnect()}
+
+    @app.post("/api/papers/{key}/zotero")
+    def save_to_zotero(key: str) -> dict[str, Any]:
+        """Create a Zotero item for a filed paper.
+
+        Offered only once a paper is in Drive, because that is when the
+        reference is worth keeping: the item links through to the stored PDF,
+        and a reference to a file that was never fetched is a dead end.
+        """
+        cred = zot.credential()
+        if cred is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Not connected to Zotero. Connect an account in Filing.",
+            )
+        missing = missing_access(cred.identity)
+        if missing:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"The connected Zotero key lacks {', '.join(missing)}. "
+                    "Reconnect it from the Filing tab."
+                ),
+            )
+
+        with open_ledger() as led:
+            paper = led.get(key)
+            if paper is None:
+                raise HTTPException(status_code=404, detail="no such paper")
+            if paper.zotero_item_key:
+                # Idempotent: a second tap, or a tap on a stale card, reports
+                # the item that already exists instead of making another.
+                return {
+                    "item_key": paper.zotero_item_key,
+                    "already": True,
+                    "warnings": [],
+                }
+            if paper.drive_file_id is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Upload this paper to Drive first, then save it to Zotero.",
+                )
+            view = paper_view(paper)
+
+        library = zotero_factory(cred) if zotero_factory else ZoteroLibrary(
+            api_key=cred.api_key, user_id=cred.identity.user_id
+        )
+        try:
+            result = library.save(view)
+        except ZoteroWriteError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        with open_ledger() as led:
+            led.set_zotero_item(key, result["item_key"])
+        return {"already": False, **result}
 
     # Vendored PDF.js. Mounted rather than inlined -- 2.7 MB has no business in
     # the page -- but still same-origin, so the no-external-hosts rule holds.

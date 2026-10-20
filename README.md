@@ -39,8 +39,14 @@ metadata APIs it queries and the Drive folder you pick.
   folder names and past choices.
 - **Zotero account** connected from the Filing tab, either through an in-app
   OAuth flow or by pasting an API key. Either way the key is verified against
-  Zotero before it is stored, and a read-only key says so rather than failing
-  later. This is the account link only — nothing is written to a library yet.
+  Zotero before it is stored, and a key short of a permission says so rather
+  than failing at the first write.
+- **Save to Zotero** from the card of any paper that reached Drive: one item
+  with the metadata, the filing note as a child note, and a link through to
+  the PDF in Drive. An arXiv venue becomes a `preprint`, a proceedings a
+  `conferencePaper`. Scholar's two-line snippet is never passed off as an
+  abstract. The item key is recorded, so the card shows it is already there
+  instead of offering to save a duplicate.
 - **Downloads** open-access PDFs, validating them by content rather than by
   `Content-Type`, and names them `YYYY Title.pdf`.
 - **Uploads to Drive** and deletes the local copy only after Drive confirms a

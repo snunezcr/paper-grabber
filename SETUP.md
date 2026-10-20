@@ -125,6 +125,17 @@ rather than completing a handshake that started somewhere else.
 **Paste a key is the route that certainly works from the tablet**, since it
 involves no redirect at all.
 
+### Saving papers
+
+Once an account is connected, any paper that has reached Drive gets a **Save to
+Zotero** button on its card — in **Stored**, and in **Filing** the moment an
+upload finishes. It creates one item with the paper's metadata, the filing note
+as a child note, and a link through to the PDF in Drive.
+
+The PDF itself is not uploaded to Zotero: this app keeps files in Drive by
+design, and Zotero's own storage is small and paid for. What Zotero gets is a
+reference that clicks through to the copy you already have.
+
 ## 5. Running commands
 
 ```bash
