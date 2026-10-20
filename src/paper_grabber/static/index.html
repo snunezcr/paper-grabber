@@ -885,7 +885,7 @@
       <span class="basefolder" id="basefolder">No base folder set</span>
       <button class="linkbtn" id="setbase">Change base folder</button>
     </div>
-    <div class="filing-head acctrow">
+    <div class="filing-head acctrow" id="zotrow" hidden>
       <span class="basefolder" id="zotstate">Zotero not connected</span>
       <span class="acctacts">
         <button class="linkbtn" id="zotconnect" hidden>Connect Zotero</button>
@@ -901,7 +901,17 @@
       <p class="keyhelp">
         <a id="zotnewkey" href="https://www.zotero.org/settings/keys/new"
            target="_blank" rel="noreferrer">Create a key on zotero.org</a>
-        — the link pre-ticks the permissions this app needs, then copy the key here.
+        — the link pre-ticks the permissions this app needs, then copy the key
+        here. Revoke one any time on your
+        <a id="zotrevoke" href="https://www.zotero.org/settings/keys"
+           target="_blank" rel="noreferrer">Zotero keys page</a>.
+      </p>
+      <p class="keyhelp">
+        To use <b>Connect Zotero</b> instead, register this app at
+        <a href="https://www.zotero.org/oauth/apps" target="_blank"
+           rel="noreferrer">zotero.org/oauth/apps</a> with the callback
+        <code id="zotcallback"></code>, and save its key and secret to
+        <code>zotero_client.json</code>.
       </p>
     </div>
     <div id="filed-wrap" hidden>
@@ -2955,6 +2965,12 @@ function noticeSignInReturn() {
 
 // ---------- Zotero account ----------
 
+// Set when a connection attempt is in flight, so the outcome is announced
+// once the status is known rather than optimistically beforehand -- a
+// read-only key is "connected" and still unusable, and saying so in that
+// order reads as a contradiction.
+let zotAwaitingNotice = false;
+
 async function loadZotero() {
   const label = $('#zotstate');
   const connect = $('#zotconnect');
@@ -2964,32 +2980,35 @@ async function loadZotero() {
   try {
     s = await api('/api/zotero/status');
   } catch (e) {
-    // An older server has no Zotero endpoints. Say nothing rather than show
-    // controls that cannot work.
-    label.textContent = '';
-    connect.hidden = paste.hidden = out.hidden = true;
+    // An older server has no Zotero endpoints. Hide the row entirely rather
+    // than leave an empty one taking up its margin.
+    $('#zotrow').hidden = true;
+    $('#zotkeyrow').hidden = true;
+    state.zotero = null;
     return;
   }
 
+  state.zotero = s;
+  $('#zotrow').hidden = false;
   if (s.new_key_url) $('#zotnewkey').href = s.new_key_url;
+  $('#zotcallback').textContent = s.callback_uri || '';
+  $('#zotrevoke').href = s.revoke_url || 'https://www.zotero.org/settings/keys';
 
-  // A key that cannot write is connected but no use for filing, so it offers
-  // the same controls as a fresh install plus the account it is stuck on.
+  // A key missing a permission is connected but cannot do the job, so it gets
+  // the controls of a fresh install plus the account it is stuck on.
   const broken = !!s.needs_reconnect;
   const who = s.username || (s.user_id ? `user ${s.user_id}` : 'account');
+  const lacks = (s.missing_access || []).join(', ');
 
+  // Stated inline rather than in a tooltip: this is the only actionable text
+  // in the row, and a tooltip on a span needs a hover or a long press -- on a
+  // tablet a long press on text opens the selection UI instead.
   if (s.connected && !broken) {
     label.textContent = `Zotero: ${who}`;
-    label.removeAttribute('data-tip');
   } else if (broken) {
-    label.textContent = `Zotero: ${who} — key cannot write`;
-    label.setAttribute('data-tip',
-      'This key has read-only access. Connect again, or paste one with write access.');
+    label.textContent = `Zotero: ${who} — this key lacks ${lacks || 'permissions'}`;
   } else {
     label.textContent = 'Zotero not connected';
-    label.setAttribute('data-tip',
-      s.has_client ? 'Connect a Zotero account to file papers into its library'
-                   : 'Paste a Zotero API key to connect an account');
   }
 
   // The OAuth button appears only where it can work: with no client registered
@@ -2998,10 +3017,18 @@ async function loadZotero() {
   connect.hidden = !(s.has_client && (!s.connected || broken));
   connect.textContent = broken ? 'Connect again' : 'Connect Zotero';
   connect.classList.toggle('warn', broken);
-  paste.hidden = !(!s.connected || broken);
-  paste.textContent = broken ? 'Paste another key' : 'Paste a key';
+  // Kept available while connected too, so switching accounts does not mean
+  // first pressing Disconnect, which reads as "remove", not "replace".
+  paste.hidden = false;
+  paste.textContent = s.connected ? 'Paste another key' : 'Paste a key';
   out.hidden = !s.connected;
-  if (s.connected) showKeyRow(false);
+  if (s.connected && !broken) showKeyRow(false);
+
+  if (zotAwaitingNotice) {
+    zotAwaitingNotice = false;
+    if (broken) showError(`Zotero connected, but this key lacks ${lacks}. Create one with those permissions.`);
+    else if (s.connected) showNotice(`Zotero connected: ${who}`);
+  }
 }
 
 function showKeyRow(on) {
@@ -3009,6 +3036,12 @@ function showKeyRow(on) {
   if (on) $('#zotkeyinput').focus();
   else $('#zotkeyinput').value = '';
 }
+
+// A key typed and never submitted should not linger in the DOM; the field is
+// cleared whenever it loses the user's attention, not only on success.
+$('#zotkeyinput').addEventListener('blur', () => {
+  if (!$('#zotkeyrow').hidden && !$('#zotkeyinput').value.trim()) showKeyRow(false);
+});
 
 $('#zotconnect').addEventListener('click', () => {
   window.location.href = '/auth/zotero/start';
@@ -3036,7 +3069,7 @@ $('#zotkeysave').addEventListener('click', async () => {
     // Clear before anything else: the key has been handed over and has no
     // business sitting in a field on a tablet someone may put down.
     showKeyRow(false);
-    showNotice('Zotero connected');
+    zotAwaitingNotice = true;
     loadZotero();
   } catch (e) {
     showError(e.message);
@@ -3055,11 +3088,12 @@ $('#zotout').addEventListener('click', async () => {
 
 function noticeZoteroReturn() {
   // The callback redirects here with ?zotero=1; strip it so a reload does not
-  // repeat the message.
+  // repeat the message. What to say is left to loadZotero, which is the first
+  // point at which the key's permissions are known.
   const params = new URLSearchParams(location.search);
   if (!params.has('zotero')) return;
   history.replaceState({}, '', location.pathname);
-  showNotice('Zotero connected');
+  zotAwaitingNotice = true;
 }
 
 // ---------- manual mail check ----------

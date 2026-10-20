@@ -12,6 +12,8 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from .models import split_name
+
 # BibTeX treats these as markup; left raw they corrupt the entry.
 _ESCAPE = {
     "\\": r"\textbackslash{}",
@@ -129,16 +131,9 @@ def _ascii_fold(text: str) -> str:
 
 
 def format_author(name: str) -> str:
-    """Render one name as BibTeX's "Surname, Given" form.
-
-    Scholar supplies "AM Hafiz" and OpenAlex "Abdul Mueed Hafiz"; both are
-    treated as given-names-then-surname, which is right for the overwhelming
-    majority of what these sources return.
-    """
-    parts = _WS_RE.sub(" ", name).strip().split(" ")
-    if len(parts) < 2:
-        return name.strip()
-    return f"{parts[-1]}, {' '.join(parts[:-1])}"
+    """Render one name as BibTeX's "Surname, Given" form."""
+    given, surname = split_name(name)
+    return f"{surname}, {given}" if given else surname
 
 
 def citation_key(authors: list[str], year: int | None, title: str) -> str:

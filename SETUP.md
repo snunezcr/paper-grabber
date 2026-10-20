@@ -114,10 +114,16 @@ Nicer on a tablet, because nothing has to be copied between devices.
 3. Restart the app. A **Connect Zotero** button appears next to **Paste a
    key**; pressing it takes you to Zotero and back.
 
-**This one works from the tablet.** Zotero accepts a plain-`http` callback on
-any host, so unlike the Google sign-in there is no certificate to arrange — the
-LAN address the tablet already uses is a valid callback. Register that origin
-too if you want to connect from there.
+**On connecting from the tablet.** Zotero's registration form takes a single
+callback URL, and its documentation does not say whether the callback sent with
+each request is honoured or the registered one substituted. So unlike the
+Google sign-in there is no certificate to arrange — but whether the LAN origin
+works has not been verified here. If Zotero substitutes the registered
+callback, the sign-in comes back to that origin instead, and the app refuses it
+rather than completing a handshake that started somewhere else.
+
+**Paste a key is the route that certainly works from the tablet**, since it
+involves no redirect at all.
 
 ## 5. Running commands
 

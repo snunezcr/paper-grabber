@@ -27,6 +27,7 @@ the pending-request-token store is a dict in memory.
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,6 +65,9 @@ KEY_PERMISSIONS = {
 
 # An abandoned tab should not pin its request token forever.
 _PENDING_TTL_SECONDS = 15 * 60
+
+# One user, one sign-in at a time. The slack is for retries and a second tab.
+_MAX_PENDING = 8
 
 _TIMEOUT = httpx.Timeout(20.0)
 
@@ -185,6 +189,24 @@ def load_client(path: Path = DEFAULT_CLIENT) -> ClientRegistration | None:
     return ClientRegistration(client_key=str(key), client_secret=str(secret))
 
 
+def missing_access(identity: ZoteroIdentity) -> list[str]:
+    """Permissions this app asks for that a key does not carry.
+
+    Checked as a set rather than write alone: notes are requested so a filing
+    note can travel with the item, and a key without them would connect
+    cleanly and then fail at the first note.
+    """
+    return [
+        name
+        for name, held in (
+            ("library", identity.library),
+            ("write", identity.write),
+            ("notes", identity.notes),
+        )
+        if not held
+    ]
+
+
 def new_key_url(permissions: dict[str, str] | None = None) -> str:
     """Zotero's new-key form, pre-filled with the permissions this app wants.
 
@@ -259,14 +281,15 @@ class ZoteroAuth:
             "library_access": bool(ident and ident.library),
             "write_access": bool(ident and ident.write),
             "notes_access": bool(ident and ident.notes),
-            # A key that cannot write is connected but useless for filing, and
-            # the fix is a new key -- the same shape as Google's needs_reauth.
-            "needs_reconnect": bool(cred) and not cred.identity.write,
+            # A key missing any permission this app asks for is connected but
+            # cannot do the job, and the fix is a new key -- the same shape as
+            # Google's needs_reauth, and measured the same way: against the
+            # whole required set, not one favoured member of it.
+            "needs_reconnect": bool(cred) and bool(missing_access(cred.identity)),
+            "missing_access": missing_access(ident) if ident else [],
             "has_client": self.has_client(),
-            "linked_at": cred.linked_at if cred else None,
             "new_key_url": new_key_url(),
             "revoke_url": REVOKE_KEYS_URL,
-            "register_app_url": REGISTER_APP_URL,
         }
 
     def disconnect(self) -> bool:
@@ -276,10 +299,13 @@ class ZoteroAuth:
         create the key, and deleting someone's hand-made key behind their back
         would break any other tool sharing it.
         """
-        if self.credential_path.exists():
+        try:
             self.credential_path.unlink()
-            return True
-        return False
+        except FileNotFoundError:
+            # Already gone, whether it never existed or a second disconnect
+            # beat us to it. Not an error either way.
+            return False
+        return True
 
     # --- verifying and storing a key -----------------------------------------
 
@@ -300,15 +326,32 @@ class ZoteroAuth:
                     "Zotero-API-Key": key,
                     "Zotero-API-Version": API_VERSION,
                 },
+                # httpx strips Authorization across a redirect but not a custom
+                # header, so following one would hand the live key to whatever
+                # host it pointed at. A redirect here is a bug to surface, not
+                # to chase.
+                follow_redirects=False,
             )
         except httpx.HTTPError as exc:
             raise ZoteroAuthError(f"could not reach Zotero: {exc}") from exc
 
+        if response.is_redirect:
+            raise ZoteroAuthError(
+                "Zotero redirected the key check; the endpoint has moved and "
+                "this app needs updating"
+            )
         if response.status_code in (401, 403):
             raise ZoteroAuthError(
                 "Zotero rejected that key. Check it was copied whole, and that "
                 "it has not been revoked."
             )
+        if response.status_code in (429, 503):
+            # Reported apart from the rest because the generic wording -- and
+            # certainly "rejected that key" -- would blame the key, which is
+            # the one diagnosis that is definitely wrong here.
+            wait = response.headers.get("Retry-After") or response.headers.get("Backoff")
+            when = f" Try again in {wait} seconds." if wait else " Try again shortly."
+            raise ZoteroAuthError(f"Zotero is busy and would not answer.{when}")
         if response.status_code >= 400:
             raise ZoteroAuthError(
                 f"Zotero answered {response.status_code} when checking the key"
@@ -338,10 +381,13 @@ class ZoteroAuth:
 
     def _store(self, api_key: str, identity: ZoteroIdentity) -> ZoteroCredential:
         cred = ZoteroCredential(api_key=api_key, identity=identity, linked_at=time.time())
-        self.credential_path.parent.mkdir(parents=True, exist_ok=True)
-        self.credential_path.write_text(cred.to_json())
-        # The key grants library access; keep it owner-only, like token.json.
-        self.credential_path.chmod(0o600)
+        self.credential_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # Created owner-only rather than written and then chmod'ed: under the
+        # usual umask the latter leaves the key world-readable for the length
+        # of the write.
+        fd = os.open(self.credential_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(cred.to_json())
         return cred
 
     # --- the OAuth flow -------------------------------------------------------
@@ -351,8 +397,26 @@ class ZoteroAuth:
         for token in [t for t, p in self._pending.items() if p.created_at < cutoff]:
             del self._pending[token]
 
+    def _trim_pending(self) -> None:
+        """Hold the pending store to a ceiling, oldest evicted first.
+
+        /auth/zotero/start needs no authentication, so without this anyone who
+        can reach the port can grow the dict for as long as the TTL lasts. Run
+        after the insert, so the ceiling is the real number held.
+        """
+        while len(self._pending) > _MAX_PENDING:
+            del self._pending[min(self._pending, key=lambda t: self._pending[t].created_at)]
+
     def _signed(self, url: str, oauth_client: OAuth1Client) -> dict[str, str]:
-        """POST a signed OAuth 1.0a request and parse the form-encoded reply."""
+        """POST a signed OAuth 1.0a request and parse the form-encoded reply.
+
+        oauthlib's default puts the parameters in an Authorization header,
+        which RFC 5849 requires providers to accept. Zotero's own example
+        instead signs them into the form body, and no test here has reached
+        the live endpoint: if /oauth/request answers with a signature error,
+        pass signature_type=SIGNATURE_TYPE_BODY with a form Content-Type
+        before looking anywhere else.
+        """
         uri, headers, body = oauth_client.sign(url, http_method="POST")
         try:
             response = self._request(
@@ -397,6 +461,16 @@ class ZoteroAuth:
         secret = fields.get("oauth_token_secret")
         if not token or not secret:
             raise ZoteroAuthError("Zotero did not return a request token")
+        # The one signal that Zotero took the callback we asked for rather than
+        # substituting the one registered with the client. Only checked when
+        # present: its absence cannot be distinguished from a provider that
+        # simply does not send it, and failing on that would be a guess.
+        confirmed = fields.get("oauth_callback_confirmed")
+        if confirmed is not None and confirmed.lower() != "true":
+            raise ZoteroAuthError(
+                "Zotero would not accept this app's callback address. Check the "
+                f"callback registered at {REGISTER_APP_URL} matches {callback_uri}"
+            )
 
         self._pending[token] = PendingConnect(
             token=token,
@@ -404,18 +478,52 @@ class ZoteroAuth:
             callback_uri=callback_uri,
             created_at=time.time(),
         )
+        self._trim_pending()
         params = {"oauth_token": token, **KEY_PERMISSIONS}
         return f"{OAUTH_AUTHORIZE_URL}?{urlencode(params)}"
 
-    def finish(self, *, oauth_token: str, oauth_verifier: str) -> ZoteroCredential:
-        """Exchange the callback for an API key, verify it, and store it."""
-        pending = self._pending.pop(oauth_token, None)
-        if pending is None:
-            # Unknown token: a stale tab, a restarted server, or a forged
-            # callback. All three want the same answer -- start again.
-            raise ZoteroAuthError("this sign-in is no longer pending; start again")
+    def finish(
+        self,
+        *,
+        oauth_token: str,
+        oauth_verifier: str,
+        callback_uri: str | None = None,
+    ) -> ZoteroCredential:
+        """Exchange the callback for an API key, verify it, and store it.
+
+        The pending entry is consumed only once a key is in hand. Popping it up
+        front would mean a Zotero hiccup mid-exchange forced the user to
+        approve a second key, orphaning the first -- and would let anyone who
+        learned the request token (it rides in the URL bar on zotero.org, so it
+        reaches history and any Referer) burn a legitimate sign-in by replaying
+        the callback.
+        """
+        # Checked before anything is consumed, so a replay without the verifier
+        # cannot destroy a sign-in that is still good.
         if not oauth_verifier:
             raise ZoteroAuthError("Zotero did not return a verifier")
+
+        pending = self._pending.get(oauth_token)
+        expired = pending is not None and (
+            pending.created_at < time.time() - _PENDING_TTL_SECONDS
+        )
+        if pending is None or expired:
+            # Unknown or stale: a closed tab, a restarted server, or a forged
+            # callback. All of them want the same answer -- start again. The
+            # TTL is enforced here and not only swept in start(), or a pending
+            # entry from days ago would still complete.
+            self._pending.pop(oauth_token, None)
+            raise ZoteroAuthError("this sign-in is no longer pending; start again")
+
+        if callback_uri is not None and callback_uri != pending.callback_uri:
+            # The callback landed on a different origin than the one the
+            # request token was signed for. Terminal: the flow is no longer the
+            # one that was started.
+            del self._pending[oauth_token]
+            raise ZoteroAuthError(
+                "this sign-in came back to a different address than it left "
+                "from; start again from the app"
+            )
 
         reg = self._client()
         fields = self._signed(
@@ -440,7 +548,12 @@ class ZoteroAuth:
         # authoritative account of what the key may do, it proves the key works
         # before anything is stored, and it makes both routes into this module
         # end identically.
-        return self._store(api_key, self.key_info(api_key))
+        identity = self.key_info(api_key)
+        # The handshake is complete only now, so this is where the request
+        # token is spent. Anything that raised above left it intact and
+        # retryable.
+        self._pending.pop(oauth_token, None)
+        return self._store(api_key, identity)
 
 
 def callback_url(request_base: str) -> str:

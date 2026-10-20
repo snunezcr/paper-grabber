@@ -868,9 +868,9 @@ def create_app(
     @app.get("/api/zotero/status")
     def zotero_status(request: Request) -> dict[str, Any]:
         status = zot.status()
-        # Zotero allows plain http on any host, so unlike the Google callback
-        # there is nothing to validate here -- the LAN address the tablet uses
-        # is a legitimate callback. It is reported so the user can register it.
+        # Shown in the page so it can be copied into the Zotero app
+        # registration, which is the one value that has to match exactly.
+        # Derived from the request, so it names the origin actually in use.
         status["callback_uri"] = zotero_callback_url(str(request.base_url))
         return status
 
@@ -889,7 +889,12 @@ def create_app(
         oauth_verifier: str = "",
         denied: str = "",
     ):
-        """Land the user back in the app, as the Google callback does."""
+        """Land the user back in the app, as the Google callback does.
+
+        `denied` is the convention OAuth 1.0a providers generally follow for a
+        refused grant; Zotero does not document it either way, so the missing
+        token below is what actually carries the case.
+        """
         if denied or not oauth_token:
             return HTMLResponse(
                 _failure_page(
@@ -898,7 +903,14 @@ def create_app(
                 )
             )
         try:
-            zot.finish(oauth_token=oauth_token, oauth_verifier=oauth_verifier)
+            zot.finish(
+                oauth_token=oauth_token,
+                oauth_verifier=oauth_verifier,
+                # Checked against the origin the sign-in was signed for: the
+                # callback is derived from the Host header, and nothing on
+                # either end validates it.
+                callback_uri=zotero_callback_url(str(request.base_url)),
+            )
         except ZoteroAuthError as exc:
             return HTMLResponse(_failure_page(str(exc)))
         # 303 for the same reason as the Google callback: this GET carried a

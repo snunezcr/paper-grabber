@@ -59,6 +59,24 @@ class AlertPaper:
         return d
 
 
+def split_name(name: str) -> tuple[str, str]:
+    """Split one byline name into given names and surname.
+
+    Scholar supplies "AM Hafiz" and OpenAlex "Abdul Mueed Hafiz"; both are
+    treated as given-names-then-surname, which is right for the overwhelming
+    majority of what these sources return. A single word is taken as all
+    surname -- a mononym, or a name we only half received -- because that is
+    the part a reference is sorted and cited by.
+
+    Shared so BibTeX's "Surname, Given" and Zotero's two name fields are built
+    from one rule rather than two that drift.
+    """
+    parts = _WS_RE.sub(" ", name).strip().split(" ")
+    if len(parts) < 2:
+        return "", " ".join(parts).strip()
+    return " ".join(parts[:-1]), parts[-1]
+
+
 def split_author_venue(line: str) -> tuple[list[str], str | None, int | None]:
     """Split Scholar's byline into authors, venue, and year.
 

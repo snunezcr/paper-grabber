@@ -26,16 +26,44 @@ OTHER_KEY = "aaaaBBBBccccDDDDeeeeFFFF"
 
 def key_info(*, key=KEY, library=True, write=True, notes=True, user_id=475425,
              username="snunez"):
-    """A trimmed copy of a real /keys/current record."""
+    """A trimmed copy of a real /keys/current record.
+
+    A permission Zotero has not granted is *absent*, never present and false:
+    the dataserver only ever writes the true ones. A fixture that emits
+    {"library": false} would be testing a shape the API cannot produce.
+    """
+    user = {"files": True}
+    if library:
+        user["library"] = True
+    if write:
+        user["write"] = True
+    if notes:
+        user["notes"] = True
     return {
         "key": key,
         "userID": user_id,
         "username": username,
         "displayName": "",
-        "access": {
-            "user": {"library": library, "files": True, "notes": notes, "write": write},
-            "groups": {},
-        },
+        "access": {"user": user, "groups": {}},
+    }
+
+
+def key_info_no_access(*, user_id=475425, username="snunez"):
+    """A key with no permissions at all: `access` is omitted entirely."""
+    return {"key": KEY, "userID": user_id, "username": username, "displayName": ""}
+
+
+def key_info_groups_only(*, user_id=475425, username="snunez"):
+    """Group-only permissions: `access.user` arrives as a JSON array, not an object.
+
+    PHP's empty array serializes as [] without JSON_FORCE_OBJECT, so this is
+    what the real endpoint returns for a key with no personal-library access.
+    """
+    return {
+        "key": KEY,
+        "userID": user_id,
+        "username": username,
+        "access": {"user": [], "groups": {"all": {"library": True}}},
     }
 
 
@@ -163,6 +191,26 @@ def test_a_read_only_key_connects_but_asks_to_be_replaced(tmp_path):
     assert s["connected"] is True
     assert s["write_access"] is False
     assert s["needs_reconnect"] is True
+    assert s["missing_access"] == ["write"]
+
+
+def test_a_key_without_notes_also_asks_to_be_replaced(tmp_path):
+    """Notes are requested so a filing note can travel, so they are required."""
+    auth = make_auth(tmp_path, lambda r: httpx.Response(200, json=key_info(notes=False)))
+    auth.connect_with_key(KEY)
+    s = auth.status()
+    assert s["write_access"] is True
+    assert s["missing_access"] == ["notes"]
+    assert s["needs_reconnect"] is True
+
+
+@pytest.mark.parametrize("record", [key_info_no_access(), key_info_groups_only()])
+def test_the_real_shapes_for_a_key_with_no_library_access(tmp_path, record):
+    """`access` omitted, and `access.user` as []: both come off the real API."""
+    auth = make_auth(tmp_path, lambda r: httpx.Response(200, json=record))
+    with pytest.raises(ZoteroAuthError, match="library access"):
+        auth.connect_with_key(KEY)
+    assert auth.credential() is None
 
 
 def test_an_empty_key_never_reaches_the_network(tmp_path):
@@ -457,3 +505,175 @@ def test_a_redirected_oauth_endpoint_is_reported_not_followed(tmp_path):
     auth = make_auth(tmp_path, handler)
     with pytest.raises(ZoteroAuthError, match="redirected"):
         auth.start("http://localhost:8823" + CALLBACK_PATH)
+
+
+def test_zotero_being_busy_does_not_blame_the_key(tmp_path):
+    """429 reported as a bad key would be the one certainly-wrong diagnosis."""
+    auth = make_auth(
+        tmp_path,
+        lambda r: httpx.Response(429, headers={"Retry-After": "30"}, text="Too Many"),
+    )
+    with pytest.raises(ZoteroAuthError) as exc:
+        auth.connect_with_key(KEY)
+    assert "busy" in str(exc.value)
+    assert "30 seconds" in str(exc.value)
+    assert "rejected" not in str(exc.value)
+
+
+def test_a_redirected_key_check_is_not_followed(tmp_path):
+    """httpx strips Authorization across a redirect but not Zotero-API-Key."""
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        if request.url.host == "api.zotero.org":
+            return httpx.Response(302, headers={"location": "https://elsewhere.test/k"})
+        return httpx.Response(200, json=key_info())
+
+    auth = make_auth(tmp_path, handler)
+    with pytest.raises(ZoteroAuthError, match="redirected"):
+        auth.key_info(KEY)
+    # The key was never sent anywhere but Zotero.
+    assert all("elsewhere.test" not in url for url in seen)
+
+
+def test_no_error_message_ever_carries_the_key(tmp_path):
+    """The kind of invariant that decays silently, so it is pinned here."""
+    cases = [
+        lambda r: httpx.Response(403, text="Invalid key"),
+        lambda r: httpx.Response(429, text="slow down"),
+        lambda r: httpx.Response(500, text="boom"),
+        lambda r: httpx.Response(200, text="not json"),
+        lambda r: httpx.Response(200, json=key_info_no_access()),
+    ]
+    for handler in cases:
+        auth = make_auth(tmp_path, handler)
+        with pytest.raises(ZoteroAuthError) as exc:
+            auth.connect_with_key(KEY)
+        assert KEY not in str(exc.value)
+
+
+# --- the pending store is spent only on success -------------------------------
+
+
+def fake_clock(monkeypatch, start=1000.0):
+    from types import SimpleNamespace
+
+    import paper_grabber.zotero_auth as za
+
+    clock = [start]
+    monkeypatch.setattr(za, "time", SimpleNamespace(time=lambda: clock[0]))
+    return clock
+
+
+def test_finish_rejects_a_pending_that_has_aged_out(tmp_path, monkeypatch):
+    """The TTL is enforced on completion, not only swept when a flow starts."""
+    clock = fake_clock(monkeypatch)
+    auth = make_auth(tmp_path, oauth_handler())
+    auth.start("http://localhost:8823" + CALLBACK_PATH)
+
+    clock[0] += 16 * 60
+    with pytest.raises(ZoteroAuthError, match="no longer pending"):
+        auth.finish(oauth_token="reqtok", oauth_verifier="v")
+
+
+def test_a_verifierless_replay_cannot_burn_a_live_sign_in(tmp_path):
+    """The token rides in the URL bar on zotero.org, so others may hold it."""
+    auth = make_auth(tmp_path, oauth_handler())
+    auth.start("http://localhost:8823" + CALLBACK_PATH)
+
+    with pytest.raises(ZoteroAuthError, match="verifier"):
+        auth.finish(oauth_token="reqtok", oauth_verifier="")
+    # Still good: the real callback completes afterwards.
+    assert auth.finish(oauth_token="reqtok", oauth_verifier="v").api_key == KEY
+
+
+def test_a_zotero_hiccup_mid_exchange_leaves_the_sign_in_retryable(tmp_path):
+    """Otherwise the user approves a second key and orphans the first."""
+    calls = {"n": 0}
+    good = oauth_handler()
+
+    def handler(request):
+        if str(request.url) == OAUTH_ACCESS_URL:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(503, text="temporarily unavailable")
+        return good(request)
+
+    auth = make_auth(tmp_path, handler)
+    auth.start("http://localhost:8823" + CALLBACK_PATH)
+
+    with pytest.raises(ZoteroAuthError, match="refused"):
+        auth.finish(oauth_token="reqtok", oauth_verifier="v")
+    assert auth.finish(oauth_token="reqtok", oauth_verifier="v").api_key == KEY
+
+
+def test_a_callback_arriving_on_another_origin_is_refused(tmp_path):
+    """Nothing on either end validates the Host-derived callback, so this does."""
+    auth = make_auth(tmp_path, oauth_handler())
+    auth.start("http://localhost:8823" + CALLBACK_PATH)
+
+    with pytest.raises(ZoteroAuthError, match="different address"):
+        auth.finish(
+            oauth_token="reqtok",
+            oauth_verifier="v",
+            callback_uri="http://evil.example.com" + CALLBACK_PATH,
+        )
+    assert auth.credential() is None
+
+
+def test_the_matching_origin_completes(tmp_path):
+    callback = "http://10.7.146.150:8823" + CALLBACK_PATH
+    auth = make_auth(tmp_path, oauth_handler())
+    auth.start(callback)
+    assert auth.finish(
+        oauth_token="reqtok", oauth_verifier="v", callback_uri=callback
+    ).api_key == KEY
+
+
+def test_a_callback_zotero_will_not_confirm_is_refused(tmp_path):
+    """The one signal that our callback was used, not the registered one."""
+    def handler(request):
+        if str(request.url) == OAUTH_REQUEST_URL:
+            return httpx.Response(200, text=str(httpx.QueryParams({
+                "oauth_token": "t", "oauth_token_secret": "s",
+                "oauth_callback_confirmed": "false",
+            })))
+        raise AssertionError("should not get past the request token")
+
+    auth = make_auth(tmp_path, handler)
+    with pytest.raises(ZoteroAuthError, match="callback"):
+        auth.start("http://localhost:8823" + CALLBACK_PATH)
+
+
+def test_the_pending_store_is_capped(tmp_path):
+    """start() needs no authentication, so it must not grow without bound."""
+    import paper_grabber.zotero_auth as za
+
+    auth = make_auth(tmp_path, oauth_handler(
+        request_tokens=tuple(f"t{i}" for i in range(40))
+    ))
+    for _ in range(40):
+        auth.start("http://localhost:8823" + CALLBACK_PATH)
+    assert len(auth._pending) <= za._MAX_PENDING
+
+
+def test_disconnecting_twice_concurrently_is_not_an_error(tmp_path):
+    auth = make_auth(tmp_path, lambda r: httpx.Response(200, json=key_info()))
+    auth.connect_with_key(KEY)
+    # Simulates the second caller finding the file already gone.
+    auth.credential_path.unlink()
+    assert auth.disconnect() is False
+
+
+def test_the_credential_is_never_briefly_world_readable(tmp_path):
+    """Created 0600, not written and then chmod'ed."""
+    import os
+
+    auth = make_auth(tmp_path, lambda r: httpx.Response(200, json=key_info()))
+    old = os.umask(0o022)
+    try:
+        auth.connect_with_key(KEY)
+    finally:
+        os.umask(old)
+    assert auth.credential_path.stat().st_mode & 0o777 == 0o600
