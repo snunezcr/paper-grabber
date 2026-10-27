@@ -1017,20 +1017,38 @@ def test_bulk_rejection_offers_an_undo(client):
     # Dropped papers are suppressed on every future check; a mis-tap here
     # would bury them silently.
     body = client.get("/").text
-    assert "pushUndo({scope: 'filing', keys: data.updated});" in body
+    assert "setUndo({scope: 'filing', keys: data.updated});" in body
 
 
-def test_undo_is_a_multi_level_stack(client):
-    # Swiping is fast, so a rushed run of decisions must walk back one at a
-    # time, not just the last -- a bounded LIFO stack, scoped to the tab.
+def test_undo_holds_one_decision_at_a_time(client):
+    # One slot, not a history: each decision replaces the last as the undoable
+    # one, so the pill always means "put back what I just did".
     body = client.get("/").text
-    assert "function pushUndo" in body
+    assert "function setUndo" in body
     assert "function popUndo" in body
-    assert "const UNDO_MAX = 25;" in body
-    # A single triage decision pushes onto the stack, not a lone slot.
-    assert "pushUndo({scope: 'triage', paper});" in body
-    # The pill shows how many steps are undoable on this tab.
-    assert "n > 1 ? `Undo (${n})` : 'Undo'" in body
+    assert "undo: null };" in body
+    # No stack left behind.
+    assert "undoStack" not in body
+    assert "UNDO_MAX" not in body
+    assert "pushUndo" not in body
+    # A triage decision fills the slot, and the label never carries a count.
+    assert "setUndo({scope: 'triage', paper});" in body
+    assert "btn.textContent = 'Undo';" in body
+
+
+def test_undo_is_spent_once_used(client):
+    # Undoing clears the slot, or a second press would try to reverse a
+    # decision that has already been reversed.
+    body = client.get("/").text
+    assert "if (state.undo === entry) setUndo(null);" in body
+
+
+def test_undo_is_scoped_to_the_view_that_produced_it(client):
+    # A triage decision is not undoable from Filing: the pill would be
+    # pointing at the wrong list.
+    body = client.get("/").text
+    assert "btn.hidden = !state.undo || state.undo.scope !== undoScope();" in body
+    assert "if (!entry || entry.scope !== undoScope()) return;" in body
 
 
 # --- rejected view and recovery -----------------------------------------------

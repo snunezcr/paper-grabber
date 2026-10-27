@@ -1197,7 +1197,7 @@ let state = { tab: 'triage', selected: new Set(), base: null, sheet: null,
               readingPapers: [], readStates: new Set(['unread', 'reading', 'read']),
               searchScope: 'view', corpus: null, annotations: [], hlRange: null,
               readerMode: 'highlight', inkColor: '#e53935', inkWidth: 3,
-              undoStack: [] };
+              undo: null };
 
 // Capabilities this page expects the server to have.
 const NEEDS = ['refresh', 'upload', 'unfile', 'drive-browse', 'processed', 'verify', 'scope-check', 'bibtex', 'suggestions', 'bulk-decision', 'rejected', 'notes', 'reader', 'local-pdf', 'reading', 'corpus', 'annotations', 'zotero-auth', 'zotero-save'];
@@ -1441,9 +1441,8 @@ async function commitDecision(card, paper, decision, {fling = 0} = {}) {
     }, fling ? 220 : 180);
     // Reversing a decision must be one tap: a mis-tap is easy on a tablet, and
     // a dropped paper is suppressed on every future sync -- invisible forever.
-    // The stack goes deep because swiping is fast: a rushed run of five
-    // decisions must be walkable back one at a time, not just the last.
-    pushUndo({scope: 'triage', paper});
+    // One paper at a time: each decision replaces the last as the undoable one.
+    setUndo({scope: 'triage', paper});
     loadFiling();
   } catch (e) {
     card.classList.remove('going', 'flinging');
@@ -1457,39 +1456,32 @@ function decide(card, paper, decision) {
   commitDecision(card, paper, decision);
 }
 
-// A stack of reversible decisions. Triage entries undo on the triage tab, bulk
-// drops from Filing on the filing tab; the pill shows the count for whichever
-// tab you're on and pops one entry per press.
-const UNDO_MAX = 25;
-
+// One reversible decision, not a history. The slot holds the most recent
+// undoable action and each new one replaces it, so a mis-tap is always one tap
+// from being put back -- but only the last decision is, which is what makes
+// the pill mean something definite. Triage entries undo on the triage tab,
+// bulk drops from Filing on the filing tab.
 function undoScope() {
   return state.tab === 'triage' ? 'triage'
     : state.tab === 'filing' ? 'filing' : null;
 }
 
-function pushUndo(entry) {
-  state.undoStack.push(entry);
-  if (state.undoStack.length > UNDO_MAX) state.undoStack.shift();
+function setUndo(entry) {
+  state.undo = entry;
   refreshUndo();
 }
 
 function refreshUndo() {
-  const scope = undoScope();
-  const n = scope ? state.undoStack.filter(e => e.scope === scope).length : 0;
   const btn = $('#undo');
-  btn.hidden = n === 0;
-  btn.textContent = n > 1 ? `Undo (${n})` : 'Undo';
+  btn.hidden = !state.undo || state.undo.scope !== undoScope();
+  btn.textContent = 'Undo';
 }
 
 async function popUndo() {
-  const scope = undoScope();
-  if (!scope) return;
-  // The most recent entry for this tab -- LIFO, so a rushed run walks back in
-  // the order it was made.
-  let i = state.undoStack.length - 1;
-  while (i >= 0 && state.undoStack[i].scope !== scope) i--;
-  if (i < 0) return;
-  const entry = state.undoStack[i];
+  const entry = state.undo;
+  // Scoped to the view that produced it: a triage decision is not undoable
+  // from Filing, where the pill would be pointing at the wrong list.
+  if (!entry || entry.scope !== undoScope()) return;
 
   try {
     if (entry.scope === 'triage') {
@@ -1513,8 +1505,8 @@ async function popUndo() {
       showCounts(data.counts);
       loadFiling();
     }
-    state.undoStack.splice(i, 1);
-    refreshUndo();
+    // Spent: one decision, one undo.
+    if (state.undo === entry) setUndo(null);
   } catch (e) { showError(`Could not undo: ${e.message}`); }
 }
 
@@ -2837,7 +2829,7 @@ $('#selreject').addEventListener('click', async () => {
     state.selected.clear();
     // Dropped papers are suppressed on every future check, so a mis-tap here
     // would bury them silently. One tap puts them back.
-    pushUndo({scope: 'filing', keys: data.updated});
+    setUndo({scope: 'filing', keys: data.updated});
     showNotice(`${data.updated.length} dropped`);
     loadFiling();
   } catch (e) { showError(`Could not drop: ${e.message}`); }

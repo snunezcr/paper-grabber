@@ -29,7 +29,8 @@ metadata APIs it queries and the Drive folder you pick.
   page metadata. On a real queue this took abstract coverage from 13 of 67 to
   46 of 67.
 - **Triage UI** for phone or tablet: title, authors, abstract, and links, with
-  keep and drop (swipe, keyboard, or buttons).
+  keep and drop (swipe, keyboard, or buttons). One decision is undoable at a
+  time — the last one — because a mis-tap buries a paper on every future check.
 - **Reading list** that tracks what you've kept — unread, reading, read — with a
   pinned queue and a mark-read control in the reader; reading is a separate axis
   from filing, so a paper can be in Drive but unread, or read but not yet filed.
