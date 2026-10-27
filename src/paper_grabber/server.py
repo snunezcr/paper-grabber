@@ -607,6 +607,34 @@ def create_app(
             led.set_destination(key, None, None)
             return {"key": key, "counts": led.counts()}
 
+    @app.delete("/api/papers/{key}")
+    def release(key: str) -> dict[str, Any]:
+        """Let a paper go: out of every list, still remembered.
+
+        Not a delete, in either direction. Outside the ledger nothing is
+        touched -- the PDF stays in Drive under the name it was filed with, and
+        a Zotero item stays in Zotero. Inside it, the record stays too, so the
+        paper cannot come back: `record` still recognises the key, and the next
+        alert that carries the same paper will not re-queue it. What the paper
+        loses is its place in the lists and the counts.
+        """
+        with open_ledger() as led:
+            paper = led.get(key)
+            if paper is None:
+                raise HTTPException(status_code=404, detail="no such paper")
+            staged_name = paper.staged_name
+            led.release(key)
+            counts = led.counts()
+
+        # A staged download now has nothing to claim it -- the upload queues
+        # skip released papers -- so it would sit in staging for good.
+        if staged_name:
+            StagingArea(staging_path or (ledger_path.parent / "staging")).discard(
+                staged_name
+            )
+
+        return {"key": key, "released": True, "counts": counts}
+
     @app.post("/api/upload")
     def start_upload(body: UploadIn) -> JSONResponse:
         """Fetch (if needed) and upload the given papers."""
@@ -817,6 +845,7 @@ def create_app(
                     "annotations",
                     "zotero-auth",
                     "zotero-save",
+                    "release",
                 }
             ),
         }

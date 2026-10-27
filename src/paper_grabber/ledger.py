@@ -93,6 +93,13 @@ _ZOTERO_COLUMNS = """
 ALTER TABLE papers ADD COLUMN zotero_item_key TEXT;
 """
 
+# When a paper was released: taken out of the working set without being
+# forgotten. The row stays so `record` still recognises the paper and no future
+# alert can offer it again; every listing leaves it out.
+_RELEASE_COLUMNS = """
+ALTER TABLE papers ADD COLUMN released_at REAL;
+"""
+
 SETTING_BASE_FOLDER_ID = "base_folder_id"
 SETTING_BASE_FOLDER_NAME = "base_folder_name"
 
@@ -237,6 +244,7 @@ class Ledger:
             _READING_COLUMNS,
             _ANNOTATION_COLUMNS,
             _ZOTERO_COLUMNS,
+            _RELEASE_COLUMNS,
         ):
             for statement in block.strip().split(";"):
                 statement = statement.strip()
@@ -355,6 +363,34 @@ class Ledger:
         self._db.commit()
         return cur.rowcount > 0
 
+    def release(self, key: str) -> bool:
+        """Take a paper out of the lists, keeping its record.
+
+        False if there is no such paper. Remembered, but not shown. The row stays exactly where it is, so
+        `record` still recognises the paper and no later alert can put it back
+        in the queue -- what changes is that every listing stops returning it,
+        and the counts stop including it. The paper is done with: out of the
+        lists, out of the way, and not coming round again.
+
+        Nothing outside the ledger is touched -- a PDF already in Drive stays
+        there, under the name it was filed with.
+        """
+        cur = self._db.execute(
+            "UPDATE papers SET released_at = ? WHERE key = ? AND released_at IS NULL",
+            (time.time(), key),
+        )
+        self._db.commit()
+        return cur.rowcount > 0
+
+    def released(self) -> list[str]:
+        """Keys taken out of the working set, for tests and diagnostics."""
+        return [
+            r[0]
+            for r in self._db.execute(
+                "SELECT key FROM papers WHERE released_at IS NOT NULL ORDER BY released_at"
+            )
+        ]
+
     def set_note(self, key: str, note: str | None) -> bool:
         """Attach a note to a paper, or clear it with an empty string.
 
@@ -393,6 +429,7 @@ class Ledger:
             " dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note,"
             " read_state, pinned, annotations, zotero_item_key"
             " FROM papers WHERE decision = ? AND drive_file_id IS NULL"
+            " AND released_at IS NULL"
         )
         if filed is True:
             sql += " AND dest_folder_id IS NOT NULL"
@@ -407,7 +444,8 @@ class Ledger:
         rows = self._db.execute(
             "SELECT key, title, payload, decision, first_seen, decided_at,"
             " dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note"
-            " FROM papers WHERE decision = ? ORDER BY decided_at DESC",
+            " FROM papers WHERE decision = ? AND released_at IS NULL"
+            " ORDER BY decided_at DESC",
             (Decision.REJECTED.value,),
         ).fetchall()
         return [self._row(r) for r in rows]
@@ -418,7 +456,7 @@ class Ledger:
             "SELECT key, title, payload, decision, first_seen, decided_at,"
             " dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note,"
             " read_state, pinned, annotations, zotero_item_key"
-            " FROM papers WHERE drive_file_id IS NOT NULL"
+            " FROM papers WHERE drive_file_id IS NOT NULL AND released_at IS NULL"
             " ORDER BY uploaded_at DESC",
         ).fetchall()
         return [self._row(r) for r in rows]
@@ -433,7 +471,8 @@ class Ledger:
             "SELECT key, title, payload, decision, first_seen, decided_at,"
             " dest_folder_id, dest_folder_name, staged_name, drive_file_id,"
             " uploaded_at, note, read_state, pinned, annotations, zotero_item_key"
-            " FROM papers WHERE decision = ? ORDER BY decided_at DESC",
+            " FROM papers WHERE decision = ? AND released_at IS NULL"
+            " ORDER BY decided_at DESC",
             (Decision.ACCEPTED.value,),
         ).fetchall()
         return [self._row(r) for r in rows]
@@ -518,6 +557,7 @@ class Ledger:
         rows = self._db.execute(
             f"SELECT key, title, payload, decision, first_seen, decided_at, dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note FROM papers"
             " WHERE decision = ? AND staged_name IS NULL AND drive_file_id IS NULL"
+            " AND released_at IS NULL"
             " ORDER BY decided_at",
             (Decision.ACCEPTED.value,),
         ).fetchall()
@@ -529,6 +569,7 @@ class Ledger:
             f"SELECT key, title, payload, decision, first_seen, decided_at, dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note FROM papers"
             " WHERE decision = ? AND staged_name IS NOT NULL"
             " AND dest_folder_id IS NOT NULL AND drive_file_id IS NULL"
+            " AND released_at IS NULL"
             " ORDER BY decided_at",
             (Decision.ACCEPTED.value,),
         ).fetchall()
@@ -570,7 +611,8 @@ class Ledger:
         """Papers awaiting a decision, oldest first."""
         rows = self._db.execute(
             "SELECT key, title, payload, decision, first_seen, decided_at, dest_folder_id, dest_folder_name, staged_name, drive_file_id, uploaded_at, note"
-            " FROM papers WHERE decision = ? ORDER BY first_seen",
+            " FROM papers WHERE decision = ? AND released_at IS NULL"
+            " ORDER BY first_seen",
             (Decision.PENDING.value,),
         ).fetchall()
         return [self._row(r) for r in rows]
@@ -579,19 +621,23 @@ class Ledger:
         """Papers by decision, plus how many have a destination chosen.
 
         "filed" is not a fourth decision -- it is a subset of accepted -- but
-        the UI wants both in one payload, so it rides along here.
+        the UI wants both in one payload, so it rides along here. Released
+        papers are left out of all of it: they are no longer anything the queue
+        can act on, so counting them would describe work that is not there.
         """
         rows = self._db.execute(
-            "SELECT decision, COUNT(*) FROM papers GROUP BY decision"
+            "SELECT decision, COUNT(*) FROM papers WHERE released_at IS NULL"
+            " GROUP BY decision"
         ).fetchall()
         counts = {d: n for d, n in rows}
         counts["filed"] = self._db.execute(
             "SELECT COUNT(*) FROM papers WHERE decision = ? AND dest_folder_id IS NOT NULL"
-            " AND drive_file_id IS NULL",
+            " AND drive_file_id IS NULL AND released_at IS NULL",
             (Decision.ACCEPTED.value,),
         ).fetchone()[0]
         counts["processed"] = self._db.execute(
-            "SELECT COUNT(*) FROM papers WHERE drive_file_id IS NOT NULL"
+            "SELECT COUNT(*) FROM papers"
+            " WHERE drive_file_id IS NOT NULL AND released_at IS NULL"
         ).fetchone()[0]
         # The reading queue's depth: readable kept papers not yet read. Counted
         # through reading() so "has a PDF" stays defined in exactly one place,
@@ -608,7 +654,10 @@ class Ledger:
         alert_query, with a missing or empty one bucketed as NO_ALERT. Lets the
         sidebar show how selective each saved search has been, so a noisy one
         can be pruned. A paper keeps its decision after being filed or
-        uploaded, so an accepted paper counts as accepted for good.
+        uploaded, so an accepted paper counts as accepted for good -- and so
+        does a released one, because releasing a paper does not un-triage it.
+        How selective a saved search has been is a fact about its history, not
+        about what is currently in the lists.
         """
         rows = self._db.execute(
             "SELECT json_extract(payload, '$.alert_query') AS alert,"

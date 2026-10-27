@@ -2135,6 +2135,127 @@ def test_reader_saves_pdf_to_the_device_for_offline(client):
     assert "/stage`, {method: 'POST'})" not in body
 
 
+# --- releasing a stored paper -------------------------------------------------
+
+
+def test_release_removes_a_paper_from_the_stored_list(app_client, seeded):
+    accept_all(app_client)
+    key = app_client.get("/api/accepted").json()["unfiled"][0]["key"]
+    upload_one(seeded, key)
+    assert len(app_client.get("/api/processed").json()["papers"]) == 1
+
+    r = app_client.delete(f"/api/papers/{key}")
+    assert r.status_code == 200
+    assert r.json()["released"] is True
+    assert app_client.get("/api/processed").json()["papers"] == []
+
+
+def test_release_never_reaches_for_drive(seeded):
+    # "Freeing", not deleting: the stored PDF is the one thing that must
+    # survive untouched. Proved by refusing to hand the app a Drive at all --
+    # if release asked for one, this would raise rather than return 200.
+    def no_drive():
+        raise AssertionError("release must not open Drive")
+
+    client = TestClient(create_app(seeded, drive_factory=no_drive))
+    accept_all(client)
+    key = client.get("/api/accepted").json()["unfiled"][0]["key"]
+    upload_one(seeded, key)
+    assert client.delete(f"/api/papers/{key}").status_code == 200
+
+
+def test_a_released_paper_keeps_its_drive_file(app_client, seeded, drive):
+    # The ledger forgets where the file is, so the file itself is all that is
+    # left of the paper -- it had better still be there.
+    accept_all(app_client)
+    key = app_client.get("/api/accepted").json()["unfiled"][0]["key"]
+    upload_one(seeded, key)
+    app_client.delete(f"/api/papers/{key}")
+    assert drive.file_status("DRIVE-ABC")["present"] is True
+    assert "DRIVE-ABC" not in drive.trashed
+
+
+def test_a_released_paper_is_not_offered_again(app_client, seeded):
+    # The record survives the release, so re-recording the same paper -- which
+    # is what a later alert does -- must not put it back in the queue.
+    accept_all(app_client)
+    key = app_client.get("/api/accepted").json()["unfiled"][0]["key"]
+    upload_one(seeded, key)
+    app_client.delete(f"/api/papers/{key}")
+
+    with Ledger(seeded) as led:
+        paper = led.get(key)
+        assert paper is not None
+        assert led.record(AlertPaper(title=paper.title)) is False
+    assert all(p["key"] != key for p in app_client.get("/api/pending").json()["papers"])
+
+
+def test_release_drops_the_paper_from_recall_and_reading(app_client, seeded):
+    accept_all(app_client)
+    key = app_client.get("/api/accepted").json()["unfiled"][0]["key"]
+    upload_one(seeded, key)
+    app_client.delete(f"/api/papers/{key}")
+    assert all(p["key"] != key for p in app_client.get("/api/corpus").json()["papers"])
+    assert all(p["key"] != key for p in app_client.get("/api/reading").json()["papers"])
+
+
+def test_release_discards_a_staged_download(app_client, seeded, tmp_path):
+    # The upload queues skip a released paper, so a staged file would sit in
+    # staging with nothing left to claim it.
+    staging = tmp_path / "staging"
+    client = TestClient(create_app(seeded, staging_path=staging))
+    accept_all(client)
+    key = client.get("/api/accepted").json()["unfiled"][0]["key"]
+    area = StagingArea(staging)
+    area.stage("2026 Quantum.pdf", b"%PDF-1.4 body")
+    with Ledger(seeded) as led:
+        led.set_staged(key, "2026 Quantum.pdf")
+    assert area.path_for("2026 Quantum.pdf").exists()
+
+    client.delete(f"/api/papers/{key}")
+    assert not area.path_for("2026 Quantum.pdf").exists()
+
+
+def test_releasing_an_unknown_paper_is_404(app_client):
+    assert app_client.delete("/api/papers/nosuchkey").status_code == 404
+
+
+def test_release_is_announced_as_a_capability(client):
+    assert "release" in client.get("/api/version").json()["capabilities"]
+    assert "'release'];" in client.get("/").text
+
+
+def test_stored_cards_offer_to_release_the_paper(client):
+    body = client.get("/").text
+    # On the stored list, labelled rather than a bare glyph, and an open
+    # padlock -- freeing the paper, not binning it.
+    assert "textBtn('release', 'unlock', 'Release'," in body
+    assert "wireRelease(el, p);" in body
+    assert "unlock:" in body
+    # Whatever else the glyph is, it is not the bin used for "remove the file".
+    release_btn = body.split("textBtn('release'")[1].split(")}")[0]
+    assert "trash" not in release_btn
+    # The copy says what survives it.
+    assert "its PDF stays in Drive" in body
+
+
+def test_release_asks_twice(client):
+    # Nothing in the UI takes it back, so one press arms and the next acts.
+    body = client.get("/").text
+    assert "if (armedRelease === button) { disarmRelease(); releasePaper(p, card); }" in body
+    assert "else armRelease(button, card);" in body
+    assert "button.querySelector('span').textContent = 'Release?';" in body
+    # And it unloads itself rather than staying armed on a card you scrolled by.
+    assert "armedReleaseTimer = setTimeout(disarmRelease, RELEASE_ARM_MS);" in body
+
+
+def test_release_uses_delete_and_prunes_the_cache(client):
+    body = client.get("/").text
+    assert "{method: 'DELETE'})" in body
+    # Or the next paint from the browser snapshot would bring the paper back.
+    assert "writeCache(PROCESSED_CACHE_KEY, state.processedPapers);" in body
+
+
 # --- what keeps the lists quick ------------------------------------------------
 
 
@@ -2163,8 +2284,12 @@ def test_a_removed_card_does_not_rebuild_the_list(client):
     body = client.get("/").text
     assert "function removeChunkedItem" in body
     assert "removeChunkedItem($('#list'), card, x => x.key === paper.key);" in body
+    assert "removeChunkedItem($('#processed'), card, x => x.key === paper.key);" in body
     # The pending batches are indexed into items, so a built removal shifts it.
     assert "if (i < st.next) st.next--;" in body
+    # Releasing therefore must not re-render the stored list.
+    release = body.split("async function releasePaper")[1].split("\n}")[0]
+    assert "renderProcessed()" not in release
 
 
 def test_the_filing_lists_are_not_chunked(client):

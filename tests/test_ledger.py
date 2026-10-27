@@ -611,3 +611,111 @@ def test_annotations_round_trip(ledger):
     assert ledger.get_annotations(key) == anns
     ledger.set_annotations(key, [])          # deletion is a full replace
     assert ledger.get_annotations(key) == []
+
+
+# --- releasing a paper --------------------------------------------------------
+
+
+def test_release_takes_a_paper_out_of_every_listing(ledger):
+    ledger.record(paper())
+    key = ledger.pending()[0].key
+    ledger.decide_by_key(key, Decision.ACCEPTED)
+    ledger.set_destination(key, "F1", "Quantum")
+    ledger.set_uploaded(key, "DRIVE-1")
+    assert [p.key for p in ledger.processed()] == [key]
+
+    assert ledger.release(key) is True
+    assert ledger.processed() == []
+    assert ledger.accepted_all() == []
+    assert ledger.accepted() == []
+    assert ledger.reading() == []
+    assert ledger.pending() == []
+    assert ledger.rejected() == []
+
+
+def test_a_released_paper_is_still_remembered(ledger):
+    # The point of the flag rather than a delete: the row stays, so no later
+    # alert can put the paper back in the queue.
+    ledger.record(paper())
+    key = ledger.pending()[0].key
+    ledger.release(key)
+    assert ledger.record(paper()) is False
+    assert ledger.pending() == []
+    assert ledger.released() == [key]
+    assert ledger.get(key) is not None
+
+
+def test_release_leaves_the_counts_alone_about_it(ledger):
+    ledger.record(paper("One"))
+    ledger.record(paper("Two"))
+    for p in ledger.pending():
+        ledger.decide_by_key(p.key, Decision.ACCEPTED)
+    key = ledger.accepted()[0].key
+    ledger.release(key)
+    counts = ledger.counts()
+    assert counts["accepted"] == 1
+    assert counts.get("processed", 0) == 0
+
+
+def test_release_keeps_a_released_paper_out_of_the_work_queues(ledger):
+    # Or the next run would download and upload a paper that has left the
+    # lists, and put it back in Drive on its own.
+    ledger.record(paper())
+    key = ledger.pending()[0].key
+    ledger.decide_by_key(key, Decision.ACCEPTED)
+    assert [p.key for p in ledger.awaiting_download()] == [key]
+    ledger.release(key)
+    assert ledger.awaiting_download() == []
+
+    ledger.set_staged(key, "2026 Quantum.pdf")
+    ledger.set_destination(key, "F1", "Quantum")
+    assert ledger.awaiting_upload() == []
+
+
+def test_releasing_twice_is_not_a_second_release(ledger):
+    ledger.record(paper())
+    key = ledger.pending()[0].key
+    assert ledger.release(key) is True
+    assert ledger.release(key) is False
+
+
+def test_an_existing_ledger_gains_the_release_column(tmp_path):
+    # A ledger that predates releasing must survive the upgrade and be able to
+    # release, or the button would 500 on everyone's real ledger.
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    con = sqlite3.connect(path)
+    con.executescript(
+        """
+        CREATE TABLE papers (
+            key TEXT PRIMARY KEY, title TEXT NOT NULL, payload TEXT NOT NULL,
+            decision TEXT NOT NULL, first_seen REAL NOT NULL, decided_at REAL
+        );
+        CREATE TABLE messages (message_id TEXT PRIMARY KEY, processed_at REAL NOT NULL);
+        """
+    )
+    con.execute("INSERT INTO papers VALUES ('k','Old Paper','{}','accepted',1.0,2.0)")
+    con.commit()
+    con.close()
+
+    with Ledger(path) as led:
+        assert [p.title for p in led.accepted()] == ["Old Paper"]
+        assert led.release("k") is True
+        assert led.accepted() == []
+        assert led.released() == ["k"]
+        assert led.get("k") is not None
+
+
+def test_releasing_an_unknown_paper_is_false(ledger):
+    assert ledger.release("nosuchkey") is False
+
+
+def test_release_keeps_the_alert_s_triage_history(ledger):
+    # How selective a saved search has been is a fact about its history, so
+    # releasing a paper does not un-triage it.
+    ledger.record(paper(alert_query="quantum"))
+    key = ledger.pending()[0].key
+    ledger.decide_by_key(key, Decision.REJECTED)
+    ledger.release(key)
+    assert ledger.alert_stats()["quantum"]["rejected"] == 1

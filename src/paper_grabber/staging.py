@@ -73,6 +73,19 @@ class StagingArea:
         os.replace(partial, final)
         return final
 
+    def discard(self, name: str) -> bool:
+        """Delete a staged file. False if it was not there.
+
+        Used when a paper leaves the pipeline: without this its download would
+        sit in staging with nothing left to claim it.
+        """
+        path = self.path_for(name)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
     def pending(self) -> list[Path]:
         """Staged files awaiting upload, oldest first."""
         files = [

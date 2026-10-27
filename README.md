@@ -53,6 +53,12 @@ metadata APIs it queries and the Drive folder you pick.
   `Content-Type`, and names them `YYYY Title.pdf`.
 - **Uploads to Drive** and deletes the local copy only after Drive confirms a
   matching size and MD5.
+- **Release** a paper you are done with, from its card in the stored list: it
+  leaves every list and every count, and nothing outside the ledger is touched
+  — the PDF stays in Drive, a Zotero item stays in Zotero. The record is kept
+  rather than deleted, so no later alert can put the paper back in the queue.
+  Hence the open padlock rather than a bin, and hence the second press: there
+  is no button to take it back.
 - **Save to this device** from the reader stores the PDF in the browser
   (IndexedDB) so it reads offline; the copy is handed to the server at upload
   time so the paper isn't fetched again.
@@ -145,7 +151,9 @@ Some deliberate choices, each of which cost a bug to learn:
 - **The local copy is deleted only after Drive returns a matching MD5.** Size
   alone passes for a truncated upload.
 - **Rejections are permanent and recorded**, so a paper rejected once is not
-  offered again when another alert surfaces it.
+  offered again when another alert surfaces it. Releasing a paper keeps that
+  record for the same reason: a row is never deleted, only taken out of the
+  lists, or the next alert would offer the paper as though it were new.
 - **Long lists are built a screenful at a time.** `content-visibility` spares
   an off-screen card its layout and paint but not its construction, which is
   the expensive part — so a two-hundred-paper queue still paid for all two
@@ -176,7 +184,7 @@ anything that matters:
 ## Development
 
 ```bash
-pytest                       # 884 tests, no network required
+pytest                       # 914 tests, no network required
 ./scripts/demo.sh            # drive the pipeline against bundled fixtures
 ```
 
