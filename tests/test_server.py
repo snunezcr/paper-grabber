@@ -942,7 +942,7 @@ def test_search_and_alert_filter_compose(client):
     # Search composes on top of the alert selection, in one shared path that
     # every list view runs through.
     body = client.get("/").text
-    assert "return byAlert(papers).filter(p => matchesQuery(p, terms));" in body
+    assert "return byAlert(papers, counts).filter(p => matchesQuery(p, terms));" in body
 
 
 def test_empty_search_result_names_the_query(client):
@@ -1946,7 +1946,10 @@ def test_reading_tab_has_a_read_state_filter(client):
     assert 'data-state="read"' in body
     assert "$('#fg-readstate').hidden = state.tab !== 'reading';" in body
     # The list is filtered by the chosen states, on top of search + alerts.
-    assert "passesFilters(raw).filter(p => state.readStates.has(p.read_state))" in body
+    assert "afterSearch.filter(p => state.readStates.has(p.read_state))" in body
+    # Filtered once and shared with the read-state tallies, not filtered twice.
+    assert "const afterSearch = passesFilters(raw, counts);" in body
+    assert "renderReadStateFilter(afterSearch);" in body
     assert "function renderReadStateFilter" in body
 
 
@@ -2130,3 +2133,99 @@ def test_reader_saves_pdf_to_the_device_for_offline(client):
     assert "{method: 'POST', body: form}" in body
     # No server-side stage endpoint any more.
     assert "/stage`, {method: 'POST'})" not in body
+
+
+# --- what keeps the lists quick ------------------------------------------------
+
+
+def test_long_lists_are_built_a_screenful_at_a_time(client):
+    # content-visibility spares an off-screen card its layout and paint, but
+    # not its construction, which is the expensive part -- so at two hundred
+    # pending papers the whole cost was still paid before the first card
+    # appeared.
+    body = client.get("/").text
+    assert "function renderChunked" in body
+    assert "function growChunk" in body
+    assert "renderChunked($('#list'), shown, triageCard);" in body
+    assert "renderChunked($('#processed'), shown, processedCard);" in body
+    assert "renderChunked($('#rejected'), shown, rejectedCard);" in body
+    assert "renderChunked($('#reading-toread'), toread, readingCard);" in body
+    # Cards go in one fragment per batch, not one insert each.
+    assert "container.insertBefore(frag, st.end);" in body
+    # The marker is watched only while there is more to build.
+    assert "if (st.next < st.items.length) st.obs.observe(st.end);" in body
+    assert "else st.obs.disconnect();" in body
+
+
+def test_a_removed_card_does_not_rebuild_the_list(client):
+    # Re-rendering restarts from the first batch, which throws away everything
+    # below -- jarring on a list you have scrolled well into.
+    body = client.get("/").text
+    assert "function removeChunkedItem" in body
+    assert "removeChunkedItem($('#list'), card, x => x.key === paper.key);" in body
+    # The pending batches are indexed into items, so a built removal shifts it.
+    assert "if (i < st.next) st.next--;" in body
+
+
+def test_the_filing_lists_are_not_chunked(client):
+    # Select-all and the file bar read the whole list out of the DOM, so a
+    # partially built one would quietly act on a subset.
+    body = client.get("/").text
+    assert "$('#unfiled').replaceChildren(" in body
+    assert "$('#filed').replaceChildren(" in body
+
+
+def test_the_end_marker_does_not_count_as_a_card(client):
+    # It is a child of the list, so "is anything left?" has to ask for cards.
+    body = client.get("/").text
+    assert "$('#empty').hidden = Boolean($('#list').querySelector('.card'));" in body
+    assert ".chunk-end { min-height: 1px; }" in body
+
+
+def test_folded_search_text_is_cached_per_paper(client):
+    # NFKD over a kilobyte of abstract, for every paper, on every keystroke.
+    body = client.get("/").text
+    assert "const haystacks = new WeakMap();" in body
+    assert "const cached = haystacks.get(p);" in body
+    assert "haystacks.set(p, hay);" in body
+    # A note edited in place has to invalidate it.
+    assert "function forgetHaystack" in body
+    assert "forgetHaystack(paper);" in body
+
+
+def test_search_does_not_re_render_on_every_keystroke(client):
+    body = client.get("/").text
+    assert "const SEARCH_DEBOUNCE_MS = 120;" in body
+    assert "searchTimer = setTimeout(runSearch, SEARCH_DEBOUNCE_MS);" in body
+    # Clearing the box is immediate, so the pending render must be dropped.
+    assert "function runSearch() {\n  clearTimeout(searchTimer);" in body
+
+
+def test_a_render_counts_the_alerts_once(client):
+    # The sidebar, the filter, the empty-state text and the match count each
+    # used to walk the queue for themselves.
+    body = client.get("/").text
+    assert "function alertCounts(papers = activePapers())" in body
+    assert "function renderAlertFilter(counts = alertCounts())" in body
+    assert "const counts = alertCounts(state.pending || []);" in body
+    assert "const inAlerts = byAlert(state.pending || [], counts);" in body
+    assert "renderSearchCount(shown.length, inAlerts.length);" in body
+
+
+def test_triage_decisions_do_not_reload_filing_one_by_one(client):
+    # /api/accepted rebuilds destination suggestions: a Drive round-trip and a
+    # TF-IDF pass over the whole corpus. One per swipe is what dragged.
+    body = client.get("/").text
+    assert "scheduleFilingRefresh();" in body
+    assert "const FILING_REFRESH_MS = 600;" in body
+    assert "filingRefreshTimer = setTimeout(loadFiling, FILING_REFRESH_MS);" in body
+    # An explicit load supersedes a scheduled one rather than racing it.
+    assert "async function loadFiling() {\n  clearTimeout(filingRefreshTimer);" in body
+
+
+def test_filing_builds_no_cards_while_its_tab_is_hidden(client):
+    # Off the tab, the badge is the only part of the queue anyone can see.
+    body = client.get("/").text
+    assert "function paintFiling() {" in body
+    assert "if (state.tab === 'filing') renderFiling();" in body
+    assert "$('#badge-filing').textContent = (state.filing?.unfiled || []).length;" in body

@@ -252,6 +252,9 @@
      hides a card as it flings off; the clip-margin leaves room for the focus
      ring so a keyboard user's highlight isn't shaved at the edges. */
   #list { overflow-x: clip; overflow-clip-margin: 8px; }
+  /* The end-of-list marker that asks for the next batch of cards. It needs a
+     sliver of height, or it has no area and never intersects. */
+  .chunk-end { min-height: 1px; }
   #list .card { touch-action: pan-y; }
   #list .card.dragging { transition: none; cursor: grabbing; user-select: none; }
   #list .card.flinging { transition: transform .22s ease-out, opacity .22s ease-out; }
@@ -1382,6 +1385,71 @@ function ensureCardObs() {
 }
 function resetCardObs() { cardObs?.disconnect(); }
 
+// Building a card is the expensive half of a render: a template parse, a few
+// queries and about eight listeners. `content-visibility` spares the off-screen
+// cards their layout and paint, but not their construction -- so at two hundred
+// pending papers, a normal week of alerts, the whole cost was still paid before
+// the first card appeared. These lists are read top-down, so build a couple of
+// screenfuls and top up as the end of the list nears the viewport.
+const CHUNK = 24;
+const chunks = new WeakMap();   // container -> its build state
+
+function renderChunked(container, items, make) {
+  let st = chunks.get(container);
+  if (!st) {
+    // A marker at the end of the list, rather than the last card, so the next
+    // batch is asked for once -- not once per card that scrolls into view.
+    const end = document.createElement('div');
+    end.className = 'chunk-end';
+    end.setAttribute('aria-hidden', 'true');
+    st = {items: [], next: 0, make, end, obs: null};
+    st.obs = new IntersectionObserver(entries => {
+      if (entries.some(e => e.isIntersecting)) growChunk(container);
+    }, {rootMargin: '600px'});
+    chunks.set(container, st);
+  }
+  st.obs.disconnect();
+  st.items = items;
+  st.make = make;
+  st.next = 0;
+  container.replaceChildren(st.end);
+  growChunk(container);
+}
+
+function growChunk(container) {
+  const st = chunks.get(container);
+  if (!st) return;
+  const batch = st.items.slice(st.next, st.next + CHUNK);
+  st.next += batch.length;
+  if (batch.length) {
+    const frag = document.createDocumentFragment();
+    for (const item of batch) frag.append(st.make(item));
+    container.insertBefore(frag, st.end);
+  }
+  // Watch only while there is more to build: left observing a finished list,
+  // the marker sits in view and fires on every scroll for nothing.
+  if (st.next < st.items.length) st.obs.observe(st.end);
+  else st.obs.disconnect();
+}
+
+// Take one card out without re-rendering. A re-render would rebuild the list
+// from its first batch, which throws away everything below -- fine on a list
+// you are at the top of, jarring on one you have scrolled well into. `match`
+// identifies the item so the pending batches forget it too.
+function removeChunkedItem(container, card, match) {
+  const st = chunks.get(container);
+  if (st) {
+    const i = st.items.findIndex(match);
+    if (i >= 0) {
+      st.items.splice(i, 1);
+      // `next` is an index into items, so dropping one already built shifts
+      // it; without this the next batch would skip an item.
+      if (i < st.next) st.next--;
+    }
+  }
+  card.remove();
+}
+
 function wireAbstract(el) {
   const more = el.querySelector('.more');
   more.addEventListener('click', () => {
@@ -1434,8 +1502,8 @@ async function commitDecision(card, paper, decision, {fling = 0} = {}) {
     showCounts(data.counts);
     state.pending = (state.pending || []).filter(x => x.key !== paper.key);
     setTimeout(() => {
-      card.remove();
-      $('#empty').hidden = $('#list').children.length > 0;
+      removeChunkedItem($('#list'), card, x => x.key === paper.key);
+      $('#empty').hidden = Boolean($('#list').querySelector('.card'));
       // Counts on the chips must follow the list, or the filter lies.
       renderAlertFilter();
     }, fling ? 220 : 180);
@@ -1443,7 +1511,11 @@ async function commitDecision(card, paper, decision, {fling = 0} = {}) {
     // a dropped paper is suppressed on every future sync -- invisible forever.
     // One paper at a time: each decision replaces the last as the undoable one.
     setUndo({scope: 'triage', paper});
-    loadFiling();
+    // Keeping a paper changes the filing queue, so its badge has to follow --
+    // but /api/accepted also rebuilds destination suggestions, which is a
+    // Drive round-trip and a TF-IDF pass over the whole corpus. One of those
+    // per swipe is what made a fast triage run drag, so a burst coalesces.
+    scheduleFilingRefresh();
   } catch (e) {
     card.classList.remove('going', 'flinging');
     card.style.opacity = '';
@@ -1669,10 +1741,14 @@ function activePapers() {
   return state.pending || [];
 }
 
-function alertCounts() {
+// Tallies the alerts in a list. A render needs this once -- for the sidebar,
+// the filter and the match count -- so the renders that care pass the result
+// along rather than recounting the queue for each of the three.
+function alertCounts(papers = activePapers()) {
   const counts = new Map();
-  for (const p of activePapers()) {
-    counts.set(alertOf(p), (counts.get(alertOf(p)) || 0) + 1);
+  for (const p of papers) {
+    const name = alertOf(p);
+    counts.set(name, (counts.get(name) || 0) + 1);
   }
   return counts;
 }
@@ -1693,8 +1769,7 @@ function alertRate(name) {
   return {text: `${pct}% dropped · ${triaged} triaged`, skipRate: (s.rejected || 0) / triaged};
 }
 
-function renderAlertFilter() {
-  const counts = alertCounts();
+function renderAlertFilter(counts = alertCounts()) {
   const group = $('#fg-alerts');
   // One alert is not a choice.
   group.hidden = counts.size < 2;
@@ -1775,10 +1850,19 @@ function fold(text) {
     .toLowerCase();
 }
 
+// Folding a paper is not cheap -- NFKD normalisation and a regex over a
+// kilobyte of abstract -- and the search box refilters the whole list on every
+// keystroke, which multiplied that by a few hundred. The folded text depends
+// only on the paper, so cache it against the object; a reload builds new
+// objects and the cache empties itself.
+const haystacks = new WeakMap();
+
 function searchHaystack(p) {
+  const cached = haystacks.get(p);
+  if (cached !== undefined) return cached;
   // Abstracts are worth searching now that most papers have a real one; notes
   // make recall work -- "what did I say about this?" is half the point.
-  return fold([
+  const hay = fold([
     p.title,
     (p.authors || []).join(' '),
     p.venue,
@@ -1787,7 +1871,13 @@ function searchHaystack(p) {
     p.note,
     (p.annotations || []).map(a => `${a.quote || ''} ${a.comment || ''}`).join(' '),
   ].filter(Boolean).join(' \u0000 '));
+  haystacks.set(p, hay);
+  return hay;
 }
+
+// A paper edited in place -- a note saved from the reader -- must be folded
+// again, or search would keep matching the text it used to have.
+function forgetHaystack(p) { haystacks.delete(p); }
 
 function matchesQuery(p, terms) {
   if (!terms.length) return true;
@@ -1801,16 +1891,16 @@ function queryTerms() {
   return fold(state.query || '').split(/\s+/).filter(Boolean);
 }
 
-function byAlert(papers) {
+function byAlert(papers, counts) {
   // Only one alert: there is no filter to apply, and the group is hidden.
-  if (alertCounts().size < 2) return papers;
+  if ((counts || alertCounts()).size < 2) return papers;
   return papers.filter(p => state.alerts.has(alertOf(p)));
 }
 
 // The alert filter and the search box, together, applied to any list.
-function passesFilters(papers) {
+function passesFilters(papers, counts) {
   const terms = queryTerms();
-  return byAlert(papers).filter(p => matchesQuery(p, terms));
+  return byAlert(papers, counts).filter(p => matchesQuery(p, terms));
 }
 
 function visiblePending() {
@@ -1838,14 +1928,20 @@ function setListEmpty(sel, shown, raw, emptyMsg) {
 
 function renderTriage() {
   resetCardObs();
-  renderAlertFilter();
-  const shown = visiblePending();
-  $('#list').replaceChildren(...shown.map(triageCard));
+  // Counted once and shared: the sidebar, the alert filter, the empty-state
+  // text and the match count below all used to walk the queue for themselves.
+  const counts = alertCounts(state.pending || []);
+  renderAlertFilter(counts);
+  const inAlerts = byAlert(state.pending || [], counts);
+  const terms = queryTerms();
+  const shown = terms.length
+    ? inAlerts.filter(p => matchesQuery(p, terms))
+    : inAlerts;
+  renderChunked($('#list'), shown, triageCard);
   // Only worth showing the swipe tip when there's a card to try it on.
   $('#swipehint').hidden = swipeHintSeen() || shown.length === 0;
 
-  const terms = queryTerms();
-  const nothingChosen = alertCounts().size > 1 && state.alerts.size === 0;
+  const nothingChosen = counts.size > 1 && state.alerts.size === 0;
   $('#empty').hidden = shown.length > 0;
   $('#empty').textContent = terms.length && !shown.length
     ? `Nothing matches "${state.query}".`
@@ -1855,7 +1951,7 @@ function renderTriage() {
         ? 'Nothing left in this selection.'
         : 'Nothing to triage. Press Check now.';
 
-  renderSearchCount(shown.length, byAlert(state.pending || []).length);
+  renderSearchCount(shown.length, inAlerts.length);
 }
 
 function renderSearchCount(shown, total) {
@@ -2391,7 +2487,7 @@ function renderRejected() {
   renderAlertFilter();
   const raw = state.rejectedPapers || [];
   const shown = passesFilters(raw);
-  $('#rejected').replaceChildren(...shown.map(rejectedCard));
+  renderChunked($('#rejected'), shown, rejectedCard);
   setListEmpty('#norejected', shown.length, raw.length, 'Nothing dropped yet.');
   renderSearchCount(shown.length, byAlert(raw).length);
 }
@@ -2417,7 +2513,7 @@ function renderProcessed() {
   renderAlertFilter();
   const raw = state.processedPapers || [];
   const shown = passesFilters(raw);
-  $('#processed').replaceChildren(...shown.map(processedCard));
+  renderChunked($('#processed'), shown, processedCard);
   setListEmpty('#noprocessed', shown.length, raw.length,
     'Nothing uploaded yet. Papers you send to Drive appear here.');
   renderSearchCount(shown.length, byAlert(raw).length);
@@ -2607,11 +2703,12 @@ async function loadReading() {
 // The read-state filter lives in the sidebar and applies only here. Its
 // per-state counts reflect the search and alert filters, so it always shows
 // how many papers each state actually holds right now.
-function renderReadStateFilter() {
+// `afterSearch` is passed in: renderReading has already filtered the list, and
+// doing it again here meant two passes over every kept paper per keystroke.
+function renderReadStateFilter(afterSearch = passesFilters(state.readingPapers || [])) {
   const group = $('#fg-readstate');
   group.hidden = state.tab !== 'reading';
   if (group.hidden) return;
-  const afterSearch = passesFilters(state.readingPapers || []);
   const per = {unread: 0, reading: 0, read: 0};
   for (const p of afterSearch) if (p.read_state in per) per[p.read_state]++;
   for (const s of ['unread', 'reading', 'read']) {
@@ -2624,11 +2721,13 @@ function renderReadStateFilter() {
 
 function renderReading() {
   resetCardObs();
-  renderAlertFilter();
-  renderReadStateFilter();
   const raw = state.readingPapers || [];
+  const counts = alertCounts(raw);
+  renderAlertFilter(counts);
   // Search and alerts, then the read-state filter on top.
-  const shown = passesFilters(raw).filter(p => state.readStates.has(p.read_state));
+  const afterSearch = passesFilters(raw, counts);
+  renderReadStateFilter(afterSearch);
+  const shown = afterSearch.filter(p => state.readStates.has(p.read_state));
   const inprogress = shown.filter(p => p.read_state === 'reading');
   // Newest-kept order comes from the server; a stable sort floats pins to the
   // top of the queue without disturbing the rest.
@@ -2636,9 +2735,9 @@ function renderReading() {
     .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
   const done = shown.filter(p => p.read_state === 'read');
 
-  $('#reading-progress').replaceChildren(...inprogress.map(readingCard));
-  $('#reading-toread').replaceChildren(...toread.map(readingCard));
-  $('#reading-read').replaceChildren(...done.map(readingCard));
+  renderChunked($('#reading-progress'), inprogress, readingCard);
+  renderChunked($('#reading-toread'), toread, readingCard);
+  renderChunked($('#reading-read'), done, readingCard);
   $('#reading-progress-wrap').hidden = inprogress.length === 0;
   $('#reading-toread-wrap').hidden = toread.length === 0;
   $('#reading-read-wrap').hidden = done.length === 0;
@@ -2647,7 +2746,7 @@ function renderReading() {
   setListEmpty('#noreading', shown.length, raw.length,
     'Nothing to read yet. Papers you keep land here.');
   $('#badge-reading').textContent = raw.filter(p => p.read_state === 'unread').length;
-  renderSearchCount(shown.length, byAlert(raw).length);
+  renderSearchCount(shown.length, byAlert(raw, counts).length);
 }
 
 async function acceptSuggestion(paper, hint, card) {
@@ -2765,25 +2864,46 @@ function writeCache(key, data) {
   try { localStorage.setItem(key, JSON.stringify(data)); } catch (e) {}
 }
 
+// Triage decisions arrive in bursts, and each one moves the filing queue. A
+// trailing delay turns a run of swipes into one reload.
+const FILING_REFRESH_MS = 600;
+let filingRefreshTimer = null;
+
+function scheduleFilingRefresh() {
+  clearTimeout(filingRefreshTimer);
+  filingRefreshTimer = setTimeout(loadFiling, FILING_REFRESH_MS);
+}
+
+// Off the Filing tab, the badge is the only part of the queue anyone can see,
+// so building the cards would be work no one looks at. Selecting the tab
+// reloads, which is where the real render happens.
+function paintFiling() {
+  if (state.tab === 'filing') renderFiling();
+  else $('#badge-filing').textContent = (state.filing?.unfiled || []).length;
+}
+
 async function loadFiling() {
+  clearTimeout(filingRefreshTimer);
   // Paint at once from what we already hold -- this session's data, or last
   // session's from the browser -- then revalidate in the background.
   if (!state.filing) state.filing = readCache(FILING_CACHE_KEY);
   if (state.filing) {
     state.base = state.filing.base;
     setBaseFolderLabel(state.filing.base);
-    renderFiling();
+    paintFiling();
   }
   try {
     const data = await api('/api/accepted');
     state.filing = data;
     state.base = data.base;
     setBaseFolderLabel(data.base);
-    renderFiling();
+    paintFiling();
     writeCache(FILING_CACHE_KEY, data);
     // Suggestions call out to Google Drive, so they must never block the list.
-    // Fetch them after the render and repaint the chips when they arrive.
-    loadSuggestions().then(() => { if (state.tab === 'filing') renderFiling(); });
+    // Fetch them after the render and repaint the chips when they arrive --
+    // and only while the tab is showing, since selecting it reloads anyway.
+    if (state.tab === 'filing')
+      loadSuggestions().then(() => { if (state.tab === 'filing') renderFiling(); });
   } catch (e) { showError(`Could not load accepted papers: ${e.message}`); }
 }
 
@@ -3251,14 +3371,23 @@ function showNotice(msg) {
 
 const searchInput = $('#q');
 
+// A search is a full re-render of the list, so a fast typist should not get
+// one per keystroke -- "quantum" would run seven. A short trailing delay
+// collapses a typed word into a single render, and is well under the point
+// where the list feels like it is lagging the box.
+const SEARCH_DEBOUNCE_MS = 120;
+let searchTimer = null;
+
 function runSearch() {
+  clearTimeout(searchTimer);
   if (state.searchScope === 'library') renderRecall();
   else applyFilters();
 }
 
 searchInput.addEventListener('input', () => {
   state.query = searchInput.value;
-  runSearch();
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(runSearch, SEARCH_DEBOUNCE_MS);
 });
 
 $('#qclear').addEventListener('click', () => {
@@ -4096,6 +4225,7 @@ $('#rdnotesave').addEventListener('click', async () => {
       body: JSON.stringify({note: $('#rdnote').value})
     });
     paper.note = r.note;
+    forgetHaystack(paper);
     $('#rdnotehint').textContent = r.synced_to_drive
       ? 'Saved, and updated in Drive.'
       : 'Saved.';

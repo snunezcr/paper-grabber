@@ -146,6 +146,10 @@ Some deliberate choices, each of which cost a bug to learn:
   alone passes for a truncated upload.
 - **Rejections are permanent and recorded**, so a paper rejected once is not
   offered again when another alert surfaces it.
+- **Long lists are built a screenful at a time.** `content-visibility` spares
+  an off-screen card its layout and paint but not its construction, which is
+  the expensive part — so a two-hundred-paper queue still paid for all two
+  hundred before showing the first.
 
 ## Limitations
 
